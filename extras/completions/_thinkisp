@@ -1,0 +1,190 @@
+#compdef thinkisp isp
+# ==============================================================================
+# ThinkISP - Autocompletado nativo para Zsh
+# ==============================================================================
+# Para activar en tu sesión:
+#   fpath=(/home/jssi/thinkisp/extras/completions $fpath)
+#   autoload -Uz compinit && compinit
+#
+# Para instalación permanente en el sistema:
+#   sudo cp /home/jssi/thinkisp/extras/completions/_thinkisp /usr/share/zsh/site-functions/_thinkisp
+# O para el usuario actual:
+#   mkdir -p ~/.zsh/completion
+#   cp /home/jssi/thinkisp/extras/completions/_thinkisp ~/.zsh/completion/_thinkisp
+#   (asegúrate de incluir fpath=(~/.zsh/completion $fpath) antes de compinit en ~/.zshrc)
+# ==============================================================================
+
+_thinkisp_connected_clients() {
+    local -a clients
+    if (( $+commands[thinkisp] )); then
+        clients=(${(f)"$(thinkisp clients 2>/dev/null | awk '/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/ {for(i=1;i<=NF;i++) if($i ~ /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/ || $i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $i}')"})
+        if (( ${#clients} > 0 )); then
+            _describe -t clients 'dispositivo conectado (IP / MAC)' clients
+        fi
+    fi
+}
+
+_thinkisp_blocked_macs() {
+    local -a blocked
+    if (( $+commands[thinkisp] )); then
+        blocked=(${(f)"$(thinkisp blocked 2>/dev/null | awk '/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/ {for(i=1;i<=NF;i++) if($i ~ /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/) print $i}')"})
+        if (( ${#blocked} > 0 )); then
+            _describe -t blocked 'dirección MAC bloqueada' blocked
+        fi
+    fi
+}
+
+_thinkisp() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    local -a subcommands
+    subcommands=(
+        'on:Activa la zona Wi-Fi (sputnik)'
+        'off:Desactiva la zona Wi-Fi y restaura conexión previa'
+        'boost:Modo máxima velocidad, 0 latencia y CPU Performance'
+        'status:Muestra el estado y dispositivos conectados'
+        'clients:Lista dispositivos conectados con su señal y velocidad'
+        'speed:Test de velocidad real (Ping, Descarga y Subida)'
+        'top:Monitor interactivo de tráfico en vivo por dispositivo'
+        'stats:Contador de datos transferidos en la sesión'
+        'widget:Salida JSON para Waybar / QuickShell'
+        'kick:Expulsa y bloquea permanentemente a un intruso por IP o MAC'
+        'unkick:Desbloquea una dirección MAC bloqueada'
+        'blocked:Lista las direcciones MAC bloqueadas'
+        'stealth:Modo invisible (ocultar/mostrar SSID)'
+        'timer:Temporizador de apagado por tiempo o inactividad'
+        'gaming:Modo anti-lag para juegos y VoIP (Colas CAKE)'
+        'limit:Limita el ancho de banda del hotspot'
+        'adblock:Bloqueador de anuncios a nivel de red DNS'
+        'dns:Selector y benchmark de servidores DNS de ultra baja latencia'
+        'qr:Muestra el código QR para conectar móviles'
+        'band:Cambia frecuencia entre 5GHz y 2.4GHz'
+        'toggle:Alterna entre encendido y apagado'
+        'tui:Abre el Dashboard Interactivo en terminal'
+    )
+
+    _arguments -C \
+        '(-h --help)'{-h,--help}'[Muestra ayuda y opciones disponibles]' \
+        '1:subcomando:->subcommand' \
+        '*::argumento:->args' && return 0
+
+    case "$state" in
+        subcommand)
+            _describe -t subcommands 'subcomando de thinkisp' subcommands
+            ;;
+        args)
+            case "$words[1]" in
+                widget)
+                    _arguments \
+                        '(-h --help)'{-h,--help}'[Muestra ayuda]' \
+                        '(-w --watch)'{-w,--watch}'[Emitir actualizaciones continuas cada 2s]'
+                    ;;
+                stealth)
+                    local -a stealth_modes
+                    stealth_modes=(
+                        'on:Ocultar el SSID (modo invisible)'
+                        'off:Mostrar el SSID (modo visible)'
+                        'status:Ver estado actual del modo stealth'
+                    )
+                    _describe -t modes 'modo stealth' stealth_modes
+                    ;;
+                gaming)
+                    local -a gaming_modes
+                    gaming_modes=(
+                        'on:Activar colas CAKE anti-bufferbloat'
+                        'off:Desactivar modo gaming'
+                        'status:Ver estado de colas CAKE'
+                        'toggle:Alternar modo gaming'
+                    )
+                    _describe -t modes 'modo gaming' gaming_modes
+                    ;;
+                adblock)
+                    local -a adblock_modes
+                    adblock_modes=(
+                        'on:Activar bloqueo de anuncios por DNS'
+                        'off:Desactivar bloqueo de anuncios'
+                        'status:Ver estado del bloqueador'
+                        'toggle:Alternar bloqueo de anuncios'
+                    )
+                    _describe -t modes 'modo adblock' adblock_modes
+                    ;;
+                dns)
+                    local -a dns_providers
+                    dns_providers=(
+                        'adguard:AdGuard DNS (Anti-Anuncios y malware)'
+                        'cloudflare:Cloudflare DNS 1.1.1.1 (Ultra-baja latencia)'
+                        'google:Google Public DNS 8.8.8.8 (Ultra estable)'
+                        'quad9:Quad9 DNS Seguro 9.9.9.9 (Privacidad y seguridad)'
+                        'default:Restaurar a DNS automático / DHCP'
+                        'auto:Seleccionar automáticamente el DNS más rápido'
+                        'benchmark:Medir latencia de todos los servidores DNS'
+                    )
+                    _describe -t providers 'servidor DNS' dns_providers
+                    ;;
+                band)
+                    local -a bands
+                    bands=(
+                        '2.4:2.4 GHz Ch 6 (Compatibilidad y mayor alcance)'
+                        '2.4g:2.4 GHz Ch 6'
+                        '5:5 GHz VHT80 Ch 149 (Rendimiento máximo ~867Mbps)'
+                        '5g:5 GHz VHT80 Ch 149'
+                        'auto:Selección automática de banda'
+                    )
+                    _describe -t bands 'banda Wi-Fi' bands
+                    ;;
+                limit)
+                    local -a limits
+                    limits=(
+                        'reset:Eliminar límites de velocidad'
+                        '10m:Limitar a 10 Mbps'
+                        '20m:Limitar a 20 Mbps'
+                        '25m:Limitar a 25 Mbps'
+                        '30m:Limitar a 30 Mbps'
+                        '50m:Limitar a 50 Mbps'
+                        '100m:Limitar a 100 Mbps'
+                    )
+                    _describe -t limits 'límite de velocidad' limits
+                    ;;
+                timer)
+                    if (( CURRENT == 2 )); then
+                        local -a timer_actions
+                        timer_actions=(
+                            'cancel:Cancelar temporizador activo'
+                            'status:Consultar tiempo restante del temporizador'
+                            'idle:Apagar automáticamente si no hay clientes'
+                            '15m:Apagar en 15 minutos'
+                            '30m:Apagar en 30 minutos'
+                            '45m:Apagar en 45 minutos'
+                            '1h:Apagar en 1 hora'
+                            '2h:Apagar en 2 horas'
+                        )
+                        _describe -t actions 'acción o duración' timer_actions
+                    elif (( CURRENT == 3 && words[2] == "idle" )); then
+                        local -a idle_times
+                        idle_times=(
+                            '5:5 minutos de inactividad'
+                            '10:10 minutos de inactividad'
+                            '15:15 minutos de inactividad'
+                            '20:20 minutos de inactividad'
+                            '30:30 minutos de inactividad'
+                        )
+                        _describe -t times 'minutos sin clientes' idle_times
+                    fi
+                    ;;
+                kick)
+                    _thinkisp_connected_clients
+                    ;;
+                unkick)
+                    _thinkisp_blocked_macs
+                    ;;
+                *)
+                    _arguments \
+                        '(-h --help)'{-h,--help}'[Muestra ayuda]'
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_thinkisp "$@"

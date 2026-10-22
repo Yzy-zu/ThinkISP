@@ -12,6 +12,7 @@ import sys
 import time
 
 from thinkisp.config import (
+    BLUE,
     BOLD,
     CYAN,
     DEFAULT_PSK,
@@ -249,6 +250,22 @@ def cmd_status(args):
                 sig_bar = format_signal_bar(c['signal'])
                 print(f"  {c['ip']:<16} {c['mac']:<19} {sig_bar:<39} {CYAN}{tx_spd:<12}{RESET}")
             print("")
+
+
+def cmd_clients(args):
+    """Lista dispositivos conectados con su señal y velocidad."""
+    clients = get_connected_clients()
+    print(f"\n{BOLD}Dispositivos Conectados ({len(clients)}):{RESET}")
+    if not clients:
+        print(f"  {DIM}Esperando dispositivos... Escanea el código QR ({BOLD}thinkisp qr{RESET}{DIM}) para conectar.{RESET}\n")
+    else:
+        print(f"  {'IP':<16} {'MAC':<19} {'SEÑAL':<30} {'VELOCIDAD':<12}")
+        print(f"  {'-'*15} {'-'*18} {'-'*28} {'-'*11}")
+        for c in clients:
+            tx_spd = f"{c['tx_mbps']} Mbps" if c['tx_mbps'] else "N/D"
+            sig_bar = format_signal_bar(c['signal'])
+            print(f"  {c['ip']:<16} {c['mac']:<19} {sig_bar:<39} {CYAN}{tx_spd:<12}{RESET}")
+        print("")
 
 
 def cmd_speed(args):

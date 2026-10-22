@@ -12,6 +12,7 @@ from thinkisp.ui.cli import (
     cmd_band,
     cmd_blocked,
     cmd_boost,
+    cmd_clients,
     cmd_dns,
     cmd_gaming,
     cmd_kick,
@@ -31,7 +32,8 @@ from thinkisp.ui.cli import (
 )
 
 
-def main():
+def build_parser():
+    """Construye el parser de argumentos de ThinkISP."""
     parser = argparse.ArgumentParser(
         prog="thinkisp",
         description="ThinkISP - Suite de Zona Wi-Fi de Alto Rendimiento para Linux / ThinkPad"
@@ -82,8 +84,13 @@ def main():
     subparsers.add_parser("toggle", help="Alterna entre encendido y apagado")
     subparsers.add_parser("tui", help="Abre el Dashboard Interactivo en terminal")
     band_parser = subparsers.add_parser("band", help="Cambia entre 5GHz y 2.4GHz")
-    band_parser.add_argument("band", choices=["5g", "2.4g"], help="Banda a configurar")
+    band_parser.add_argument("band", choices=["5g", "2.4g", "5", "2.4", "auto"], help="Banda a configurar (5g, 2.4g, auto)")
 
+    return parser
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     # Si se invoca sin argumentos o con 'tui', lanzar el Dashboard Interactivo
@@ -106,8 +113,10 @@ def main():
         cmd_off(args)
     elif args.command == "boost":
         cmd_boost(args)
-    elif args.command in ("status", "clients"):
+    elif args.command == "status":
         cmd_status(args)
+    elif args.command == "clients":
+        cmd_clients(args)
     elif args.command == "speed":
         cmd_speed(args)
     elif args.command in ("top", "watch"):

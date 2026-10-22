@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import time
@@ -127,89 +128,142 @@ def get_timer_status():
         return None
 
 
+class HotspotWatcher:
+    """Clase para monitorear eventos del hotspot (conexión/desconexión de clientes y temporizadores)."""
+
+    def __init__(self, check_interval=2.0, timer_file=TIMER_FILE):
+        self.check_interval = check_interval
+        self.timer_file = timer_file
+        self.known_macs = set()
+        self.initial_scan = True
+        self.idle_seconds = 0
+        self.running = False
+        self.on_client_connected = []
+        self.on_client_disconnected = []
+        self.on_timer_warning = []
+        self.on_timer_expired = []
+        self.on_idle_expired = []
+
+    def scan_clients(self):
+        """Escanea estaciones conectadas y detecta clientes nuevos o desconectados."""
+        iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"])
+        curr_macs = set()
+        if iw_out:
+            for line in iw_out.splitlines():
+                m = re.match(r"Station\s+([0-9a-fA-F:]{17})", line)
+                if m:
+                    curr_macs.add(m.group(1).lower())
+
+        events = []
+        if self.initial_scan:
+            self.known_macs = curr_macs
+            self.initial_scan = False
+        else:
+            new_macs = curr_macs - self.known_macs
+            removed_macs = self.known_macs - curr_macs
+
+            if new_macs:
+                arp_map = get_arp_map()
+                for mac in new_macs:
+                    ip = arp_map.get(mac, "Asignando...")
+                    hostname = get_hostname_for_ip(ip)
+                    event = {"type": "client_connected", "mac": mac, "ip": ip, "hostname": hostname}
+                    events.append(event)
+                    for cb in self.on_client_connected:
+                        cb(event)
+                    notify(
+                        "📱 Nuevo Dispositivo Conectado",
+                        f"Se conectó: {hostname}\nIP: {ip}\nMAC: {mac}",
+                        icon="network-wireless-hotspot"
+                    )
+
+            if removed_macs:
+                for mac in removed_macs:
+                    event = {"type": "client_disconnected", "mac": mac}
+                    events.append(event)
+                    for cb in self.on_client_disconnected:
+                        cb(event)
+                    notify(
+                        "Dispositivo Desconectado",
+                        f"Un dispositivo ha abandonado la red.\nMAC: {mac}",
+                        icon="network-wireless"
+                    )
+
+            self.known_macs = curr_macs
+
+        return events
+
+    def check_timers(self):
+        """Comprueba temporizadores de cuenta regresiva e inactividad."""
+        if not self.timer_file.exists():
+            return None
+
+        try:
+            timer_data = json.loads(self.timer_file.read_text())
+            curr_time = time.time()
+            res = {"action": None}
+
+            end_time = timer_data.get("end_time")
+            if end_time:
+                rem = end_time - curr_time
+                if rem <= 0:
+                    res["action"] = "shutdown_timer"
+                    for cb in self.on_timer_expired:
+                        cb(timer_data)
+                    notify("⏰ Temporizador Finalizado", "El tiempo programado concluyó. Zona Wi-Fi apagada.", icon="network-wireless")
+                    self.timer_file.unlink(missing_ok=True)
+                    run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
+                    return res
+                elif rem <= 300 and not timer_data.get("warned_5m"):
+                    res["action"] = "warn_5m"
+                    for cb in self.on_timer_warning:
+                        cb(rem)
+                    notify("⏳ Aviso de Temporizador", "La zona Wi-Fi se apagará automáticamente en 5 minutos.", icon="network-wireless-hotspot")
+                    timer_data["warned_5m"] = True
+                    self.timer_file.write_text(json.dumps(timer_data))
+
+            idle_timeout = timer_data.get("idle_timeout")
+            if idle_timeout:
+                if len(self.known_macs) == 0:
+                    self.idle_seconds += self.check_interval
+                    if self.idle_seconds >= idle_timeout:
+                        mins = idle_timeout // 60
+                        res["action"] = "shutdown_idle"
+                        for cb in self.on_idle_expired:
+                            cb(timer_data)
+                        notify("🔋 Apagado por Inactividad", f"No hubo dispositivos conectados en {mins} min. Hotspot apagado.", icon="network-wireless")
+                        self.timer_file.unlink(missing_ok=True)
+                        run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
+                        return res
+                else:
+                    self.idle_seconds = 0
+
+            return res
+        except Exception:
+            return None
+
+    def tick(self):
+        """Ejecuta un ciclo de escaneo de clientes y verificación de temporizadores."""
+        client_events = self.scan_clients()
+        timer_result = self.check_timers()
+        return {
+            "client_events": client_events,
+            "timer_result": timer_result
+        }
+
+
 def run_daemon_loop():
     """Bucle principal del demonio."""
-    import re
-    known_macs = set()
-    initial_scan = True
-    idle_seconds = 0
+    watcher = HotspotWatcher(check_interval=2.0)
 
     while True:
         try:
             if not is_hotspot_active():
                 break
 
-            # 1. Vigilar clientes para enviar notificaciones en Hyprland
-            iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"])
-            curr_macs = set()
-            if iw_out:
-                for line in iw_out.splitlines():
-                    m = re.match(r"Station\s+([0-9a-fA-F:]{17})", line)
-                    if m:
-                        curr_macs.add(m.group(1).lower())
-
-            if initial_scan:
-                known_macs = curr_macs
-                initial_scan = False
-            else:
-                new_macs = curr_macs - known_macs
-                removed_macs = known_macs - curr_macs
-
-                if new_macs:
-                    time.sleep(0.8)
-                    arp_map = get_arp_map()
-                    for mac in new_macs:
-                        ip = arp_map.get(mac, "Asignando...")
-                        hostname = get_hostname_for_ip(ip)
-                        notify(
-                            "📱 Nuevo Dispositivo Conectado",
-                            f"Se conectó: {hostname}\nIP: {ip}\nMAC: {mac}",
-                            icon="network-wireless-hotspot"
-                        )
-
-                if removed_macs:
-                    for mac in removed_macs:
-                        notify(
-                            "Dispositivo Desconectado",
-                            f"Un dispositivo ha abandonado la red.\nMAC: {mac}",
-                            icon="network-wireless"
-                        )
-
-                known_macs = curr_macs
-
-            # 2. Vigilar temporizadores
-            if TIMER_FILE.exists():
-                try:
-                    timer_data = json.loads(TIMER_FILE.read_text())
-                    curr_time = time.time()
-                    
-                    end_time = timer_data.get("end_time")
-                    if end_time:
-                        rem = end_time - curr_time
-                        if rem <= 0:
-                            notify("⏰ Temporizador Finalizado", "El tiempo programado concluyó. Zona Wi-Fi apagada.", icon="network-wireless")
-                            TIMER_FILE.unlink(missing_ok=True)
-                            run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
-                            break
-                        elif rem <= 300 and not timer_data.get("warned_5m"):
-                            notify("⏳ Aviso de Temporizador", "La zona Wi-Fi se apagará automáticamente en 5 minutos.", icon="network-wireless-hotspot")
-                            timer_data["warned_5m"] = True
-                            TIMER_FILE.write_text(json.dumps(timer_data))
-
-                    idle_timeout = timer_data.get("idle_timeout")
-                    if idle_timeout:
-                        if len(curr_macs) == 0:
-                            idle_seconds += 2
-                            if idle_seconds >= idle_timeout:
-                                mins = idle_timeout // 60
-                                notify("🔋 Apagado por Inactividad", f"No hubo dispositivos conectados en {mins} min. Hotspot apagado.", icon="network-wireless")
-                                TIMER_FILE.unlink(missing_ok=True)
-                                run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
-                                break
-                        else:
-                            idle_seconds = 0
-                except Exception:
-                    pass
+            tick_res = watcher.tick()
+            if tick_res.get("timer_result") and tick_res["timer_result"].get("action") in ("shutdown_timer", "shutdown_idle"):
+                break
 
             time.sleep(2.0)
         except Exception:

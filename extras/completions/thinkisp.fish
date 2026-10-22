@@ -88,12 +88,16 @@ for cmd in thinkisp isp
     complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "google" -d "8.8.8.8 / 8.8.4.4 (Ultra estable)"
     complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "quad9" -d "9.9.9.9 (Seguridad y filtrado malware)"
     complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "adguard" -d "94.140.14.14 (Filtrado de publicidad)"
+    complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "default" -d "Restaurar a DNS automático / DHCP"
     complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "auto" -d "Seleccionar automáticamente el más rápido"
     complete -c $cmd -n "__fish_seen_subcommand_from dns" -a "benchmark" -d "Medir latencia de todos los servidores DNS"
 
     # band
     complete -c $cmd -n "__fish_seen_subcommand_from band" -a "5g" -d "5 GHz VHT80 Ch 149 (Rendimiento máximo ~867Mbps)"
+    complete -c $cmd -n "__fish_seen_subcommand_from band" -a "5" -d "5 GHz VHT80 Ch 149"
     complete -c $cmd -n "__fish_seen_subcommand_from band" -a "2.4g" -d "2.4 GHz Ch 6 (Compatibilidad y mayor alcance)"
+    complete -c $cmd -n "__fish_seen_subcommand_from band" -a "2.4" -d "2.4 GHz Ch 6"
+    complete -c $cmd -n "__fish_seen_subcommand_from band" -a "auto" -d "Selección automática de banda"
 
     # timer
     complete -c $cmd -n "__fish_seen_subcommand_from timer" -a "cancel" -d "Cancelar temporizador activo"

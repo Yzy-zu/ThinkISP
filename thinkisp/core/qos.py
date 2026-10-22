@@ -2,6 +2,9 @@
 ThinkISP - Módulo de Calidad de Servicio (QoS), CAKE y Traffic Shaping
 """
 
+from pathlib import Path
+import shutil
+
 from thinkisp.config import HOTSPOT_CONN, THINKPAD_MODE_BIN
 from thinkisp.core.network import (
     is_hotspot_active,
@@ -130,3 +133,56 @@ def apply_boost_mode():
 
     notify("🚀 ISP BOOST Activado", "5GHz 80MHz | CAKE | 0 Latencia | ThinkPad Nuclear")
     return True, "Modo Turbo Boost activado con éxito."
+
+
+def enable_gaming_mode():
+    """Activa colas inteligentes CAKE y prioridad UDP anti-jitter."""
+    return set_gaming_mode(True)
+
+
+def disable_gaming_mode():
+    """Desactiva colas CAKE restaurando colas estándar."""
+    return set_gaming_mode(False)
+
+
+def apply_rate_limit(mbps):
+    """Aplica control de tasa TBF (Token Bucket Filter) en el hotspot."""
+    return set_rate_limit(mbps)
+
+
+def get_current_qos():
+    """Obtiene el estado completo de calidad de servicio y límites."""
+    state = load_state()
+    return {
+        "gaming_mode": state.get("gaming_mode", False),
+        "rate_limit": state.get("rate_limit", None)
+    }
+
+
+def set_thinkpad_performance():
+    """Configura el perfil de máximo rendimiento de forma universal (thinkpad-mode / powerprofilesctl / sysfs)."""
+    # 1. thinkpad-mode si está presente en la laptop ThinkPad
+    if THINKPAD_MODE_BIN.exists():
+        try:
+            run_cmd([str(THINKPAD_MODE_BIN), "performance"])
+            return True
+        except Exception:
+            pass
+
+    # 2. freedesktop power-profiles-daemon (Estándar en Ubuntu, Fedora, Debian, Arch con GNOME o KDE)
+    if shutil.which("powerprofilesctl"):
+        try:
+            run_cmd(["powerprofilesctl", "set", "performance"])
+            return True
+        except Exception:
+            pass
+
+    # 3. sysfs cpufreq governor directo
+    try:
+        for p in Path("/sys/devices/system/cpu").glob("cpu*/cpufreq/scaling_governor"):
+            p.write_text("performance")
+        return True
+    except Exception:
+        pass
+
+    return False

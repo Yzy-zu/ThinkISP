@@ -4,6 +4,7 @@ ThinkISP - Módulo Wi-Fi y Gestión de Clientes
 
 from pathlib import Path
 import re
+import shutil
 import socket
 import subprocess
 import time
@@ -44,8 +45,10 @@ def get_arp_map():
     if neigh_out:
         for line in neigh_out.splitlines():
             parts = line.split()
-            if len(parts) >= 5 and parts[2] == "lladdr":
-                arp_map[parts[4].lower()] = parts[0]
+            if "lladdr" in parts:
+                idx = parts.index("lladdr")
+                if idx + 1 < len(parts):
+                    arp_map[parts[idx + 1].lower()] = parts[0]
     return arp_map
 
 
@@ -60,6 +63,30 @@ def get_hostname_for_ip(ip):
     except Exception:
         pass
     return "Dispositivo móvil"
+
+
+def parse_dhcp_leases(path=None):
+    """Parsea el archivo de asignaciones DHCP (leases) de dnsmasq / NetworkManager."""
+    lease_paths = [Path(path)] if path else [
+        Path(f"/var/lib/NetworkManager/dnsmasq-{WLAN_IFACE}.leases"),
+        Path("/var/lib/NetworkManager/dnsmasq.leases"),
+        Path("/var/lib/misc/dnsmasq.leases"),
+    ]
+    leases = {}
+    for lp in lease_paths:
+        if lp and lp.exists():
+            try:
+                for line in lp.read_text().splitlines():
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        mac = parts[1].lower()
+                        ip = parts[2]
+                        host = parts[3] if parts[3] != "*" else "Dispositivo móvil"
+                        leases[mac] = {"ip": ip, "hostname": host}
+                break
+            except Exception:
+                pass
+    return leases
 
 
 def get_connected_clients():
@@ -96,11 +123,21 @@ def get_connected_clients():
                     stations[current_mac]["conn_time"] = int(ct.group(1))
 
     arp_map = get_arp_map()
+    leases = parse_dhcp_leases()
 
     for mac, data in stations.items():
-        ip = arp_map.get(mac, "Desconocida")
-        hostname = get_hostname_for_ip(ip)
-        
+        ip = arp_map.get(mac)
+        hostname = None
+        if mac in leases:
+            if not ip or ip == "Desconocida":
+                ip = leases[mac]["ip"]
+            hostname = leases[mac]["hostname"]
+
+        if not ip:
+            ip = "Desconocida"
+        if not hostname or hostname == "Dispositivo móvil":
+            hostname = get_hostname_for_ip(ip)
+
         clients.append({
             "mac": mac,
             "ip": ip,
@@ -268,7 +305,7 @@ def set_stealth_mode(enabled):
 
 
 def set_band(band):
-    """Configura la banda en 5G (Canal 149) o 2.4G (Canal 6)."""
+    """Configura la banda en 5G (Canal 149), 2.4G (Canal 6) o Auto."""
     band = band.lower()
     if band in ("5g", "5ghz", "5"):
         run_cmd([
@@ -282,10 +319,31 @@ def set_band(band):
             "802-11-wireless.band", "bg",
             "802-11-wireless.channel", "6"
         ])
+    elif band in ("auto", "default", "any"):
+        run_cmd([
+            "nmcli", "connection", "modify", HOTSPOT_CONN,
+            "802-11-wireless.band", "",
+            "802-11-wireless.channel", "0"
+        ])
     else:
-        return False, "Banda no válida. Usa 5g o 2.4g."
+        return False, "Banda no válida. Usa 5g, 2.4g o auto."
 
     if is_hotspot_active():
         run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
         apply_zero_latency_optimizations()
     return True, f"Banda cambiada a {band}."
+
+
+def optimize_low_latency():
+    """Aplica optimizaciones de latencia cero desactivando power save y ampliando txqueuelen."""
+    return apply_zero_latency_optimizations()
+
+
+def get_qr_ascii(ssid=DEFAULT_SSID, psk=DEFAULT_PSK):
+    """Genera representación del código QR en ASCII / UTF-8 para conexión Wi-Fi rápida."""
+    wifi_str = f"WIFI:S:{ssid};T:WPA;P:{psk};;"
+    if shutil.which("qrencode"):
+        out = run_cmd(["qrencode", "-t", "UTF8", wifi_str])
+        if out:
+            return out
+    return f"+-----------------------+\n| QR: {ssid} |\n| PSK: {psk} |\n+-----------------------+"

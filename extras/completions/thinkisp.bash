@@ -55,11 +55,11 @@ _thinkisp_completions() {
             ;;
 
         dns)
-            COMPREPLY=($(compgen -W "cloudflare google quad9 adguard auto benchmark" -- "$cur"))
+            COMPREPLY=($(compgen -W "cloudflare google quad9 adguard default auto benchmark" -- "$cur"))
             ;;
 
         band)
-            COMPREPLY=($(compgen -W "5g 2.4g" -- "$cur"))
+            COMPREPLY=($(compgen -W "5 5g 2.4 2.4g auto" -- "$cur"))
             ;;
 
         limit)

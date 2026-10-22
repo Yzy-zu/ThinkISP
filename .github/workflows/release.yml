@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & Publish Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build release tarball
+        run: |
+          VERSION="${{ github.ref_name }}"
+          ARCHIVE_NAME="thinkisp-${VERSION}.tar.gz"
+          echo "Packaging $ARCHIVE_NAME..."
+          tar -czf "$ARCHIVE_NAME" \
+            --exclude='.git' \
+            --exclude='.github' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.pytest_cache' \
+            .
+          sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            thinkisp-${{ github.ref_name }}.tar.gz
+            thinkisp-${{ github.ref_name }}.tar.gz.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

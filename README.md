@@ -147,23 +147,27 @@ cd thinkisp
 
 ---
 
-## 🧩 Integración con Hyprland / Waybar
+## 🧩 Compatibilidad y Shells
 
-### Atajo de teclado en Hyprland (`keybinds.conf` o `keybinds.lua`):
-```lua
-hl.bind("SUPER, H", hl.dsp.exec_cmd("thinkisp toggle"))
-```
+ThinkISP es 100% agnóstico y portable en cualquier distribución Linux (Ubuntu, Debian, Fedora, Arch Linux, Pop!_OS, openSUSE) y entorno gráfico (GNOME, KDE Plasma, XFCE, Hyprland, Sway, i3).
 
-### Módulo para Waybar (`config.jsonc`):
-```jsonc
-"custom/thinkisp": {
-    "format": "{}",
-    "return-type": "json",
-    "exec": "thinkisp widget -w",
-    "on-click": "thinkisp toggle",
-    "on-click-right": "foot thinkisp",
-    "tooltip": true
-}
+### Autocompletado de Shell (Bash, Zsh, Fish)
+El instalador `./install.sh` instala automáticamente el autocompletado nativo:
+- **Bash**: `~/.local/share/bash-completion/completions/thinkisp`
+- **Zsh**: `~/.zsh/completion/_thinkisp` (recuerda tener `fpath=(~/.zsh/completion $fpath)` en tu `~/.zshrc`)
+- **Fish**: `~/.config/fish/completions/thinkisp.fish`
+
+### Salida JSON para Barras de Estado (`thinkisp widget`)
+Si usas cualquier barra de estado (Polybar, Waybar, i3blocks, QuickShell), `thinkisp widget` emite JSON compatible con el estándar FreeDesktop.
+
+---
+
+## 🧪 Pruebas Automatizadas (Unit Tests)
+
+ThinkISP incluye una suite completa de pruebas unitarias sin dependencias externas:
+
+```bash
+python3 tests/run_tests.py
 ```
 
 ---

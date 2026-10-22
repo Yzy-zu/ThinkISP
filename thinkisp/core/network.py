@@ -227,6 +227,22 @@ def get_hotspot_ip():
     return "10.42.0.1/24"
 
 
+def format_speed(bps):
+    """Formatea velocidad en bps, Kbps, Mbps o Gbps con decimales legibles."""
+    try:
+        val = float(bps)
+    except (ValueError, TypeError):
+        return "0 bps"
+    if val < 1000:
+        return f"{val:.0f} bps"
+    elif val < 1_000_000:
+        return f"{val / 1000:.1f} Kbps"
+    elif val < 1_000_000_000:
+        return f"{val / 1_000_000:.1f} Mbps"
+    else:
+        return f"{val / 1_000_000_000:.2f} Gbps"
+
+
 def get_ip_forward_status():
     """Verifica si el enrutamiento de paquetes IPv4 está activo en el kernel."""
     fwd_path = Path("/proc/sys/net/ipv4/ip_forward")
@@ -236,3 +252,62 @@ def get_ip_forward_status():
         except Exception:
             pass
     return False
+
+
+def is_ip_forwarding_enabled():
+    """Verifica si el reenvío de paquetes IPv4 está activo en el kernel."""
+    return get_ip_forward_status()
+
+
+def enable_ip_forwarding():
+    """Habilita el reenvío de paquetes IPv4 en el sistema."""
+    res = run_cmd(["sysctl", "-w", "net.ipv4.ip_forward=1"])
+    if res and "net.ipv4.ip_forward = 1" in res:
+        return True
+    fwd_path = Path("/proc/sys/net/ipv4/ip_forward")
+    try:
+        fwd_path.write_text("1")
+        return True
+    except Exception:
+        pass
+    return res is not None
+
+
+def get_default_gateway():
+    """Obtiene la dirección IP de la puerta de enlace predeterminada."""
+    out = run_cmd(["ip", "route", "show", "default"])
+    if out:
+        m = re.search(r"default via ([0-9.]+)", out)
+        if m:
+            return m.group(1)
+    return None
+
+
+def get_hotspot_status():
+    """Devuelve un resumen del estado del punto de acceso."""
+    active = is_hotspot_active()
+    return {
+        "active": active,
+        "ssid": HOTSPOT_CONN if active else None,
+        "ip": get_hotspot_ip() if active else None,
+        "forwarding": get_ip_forward_status(),
+        "ethernet": get_ethernet_status()
+    }
+
+
+def get_interface_stats(iface=WLAN_IFACE):
+    """Obtiene estadísticas detalladas de transmisión/recepción de una interfaz."""
+    rx_bytes, tx_bytes = get_iface_bytes(iface)
+    rx_pkts_path = Path(f"/sys/class/net/{iface}/statistics/rx_packets")
+    tx_pkts_path = Path(f"/sys/class/net/{iface}/statistics/tx_packets")
+    rx_pkts = int(rx_pkts_path.read_text().strip()) if rx_pkts_path.exists() else 0
+    tx_pkts = int(tx_pkts_path.read_text().strip()) if tx_pkts_path.exists() else 0
+    return {
+        "interface": iface,
+        "rx_bytes": rx_bytes,
+        "tx_bytes": tx_bytes,
+        "rx_packets": rx_pkts,
+        "tx_packets": tx_pkts,
+        "rx_formatted": format_bytes(rx_bytes),
+        "tx_formatted": format_bytes(tx_bytes),
+    }

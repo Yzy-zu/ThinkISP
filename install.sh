@@ -70,6 +70,52 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo -e "    ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${RESET}"
 fi
 
+# 6. Configuración de Autocompletado de Shell (Zsh, Bash, Fish)
+echo -e "\n  ${BOLD}Configuración de Autocompletado de Shell:${RESET}"
+
+# Zsh completion
+ZSH_SRC="$PROJECT_DIR/extras/completions/_thinkisp"
+if [ -f "$ZSH_SRC" ]; then
+    if [ -w "/usr/local/share/zsh/site-functions" ]; then
+        cp "$ZSH_SRC" "/usr/local/share/zsh/site-functions/_thinkisp"
+        chmod 644 "/usr/local/share/zsh/site-functions/_thinkisp"
+        echo -e "  ${GREEN}✔ Autocompletado Zsh instalado en:${RESET} /usr/local/share/zsh/site-functions/_thinkisp"
+    elif [ -w "/usr/share/zsh/site-functions" ]; then
+        cp "$ZSH_SRC" "/usr/share/zsh/site-functions/_thinkisp"
+        chmod 644 "/usr/share/zsh/site-functions/_thinkisp"
+        echo -e "  ${GREEN}✔ Autocompletado Zsh instalado en:${RESET} /usr/share/zsh/site-functions/_thinkisp"
+    else
+        ZSH_USER_DIR="${HOME}/.zsh/completion"
+        mkdir -p "$ZSH_USER_DIR"
+        cp "$ZSH_SRC" "$ZSH_USER_DIR/_thinkisp"
+        echo -e "  ${GREEN}✔ Autocompletado Zsh copiado a:${RESET} $ZSH_USER_DIR/_thinkisp"
+        echo -e "    ${YELLOW}ℹ Para activar Zsh:${RESET} Añade en tu ${CYAN}~/.zshrc${RESET} (antes de compinit):"
+        echo -e "      ${CYAN}fpath=(~/.zsh/completion \$fpath)${RESET}"
+        echo -e "      ${CYAN}autoload -Uz compinit && compinit${RESET}"
+        echo -e "    ${DIM}(O instala globalmente con: sudo cp $ZSH_SRC /usr/share/zsh/site-functions/_thinkisp)${RESET}"
+    fi
+fi
+
+# Bash completion
+BASH_USER_DIR="${HOME}/.local/share/bash-completion/completions"
+BASH_SRC="$PROJECT_DIR/extras/completions/thinkisp.bash"
+if [ -f "$BASH_SRC" ]; then
+    mkdir -p "$BASH_USER_DIR"
+    cp "$BASH_SRC" "$BASH_USER_DIR/thinkisp"
+    ln -sf "$BASH_USER_DIR/thinkisp" "$BASH_USER_DIR/isp"
+    echo -e "  ${GREEN}✔ Autocompletado Bash instalado en:${RESET} $BASH_USER_DIR/thinkisp"
+fi
+
+# Fish completion
+FISH_USER_DIR="${HOME}/.config/fish/completions"
+FISH_SRC="$PROJECT_DIR/extras/completions/thinkisp.fish"
+if [ -f "$FISH_SRC" ]; then
+    mkdir -p "$FISH_USER_DIR"
+    cp "$FISH_SRC" "$FISH_USER_DIR/thinkisp.fish"
+    ln -sf "$FISH_USER_DIR/thinkisp.fish" "$FISH_USER_DIR/isp.fish"
+    echo -e "  ${GREEN}✔ Autocompletado Fish instalado en:${RESET} $FISH_USER_DIR/thinkisp.fish"
+fi
+
 echo -e "\n${BOLD}${GREEN}✔ ¡Instalación completada exitosamente!${RESET}"
 echo -e "  ${DIM}Ejecuta ${BOLD}thinkisp${RESET}${DIM} para abrir el Dashboard interactivo (TUI).${RESET}"
 echo -e "  ${DIM}O usa comandos directos como ${BOLD}isp on${RESET}${DIM}, ${BOLD}isp boost${RESET}${DIM}, ${BOLD}isp top${RESET}${DIM}, ${BOLD}isp qr${RESET}.${RESET}\n"

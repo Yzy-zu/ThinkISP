@@ -132,3 +132,13 @@ def run_speedtest():
         metrics["error"] = f"Error en subida: {e}"
 
     return metrics
+
+
+def set_upstream_dns(provider):
+    """Establece el proveedor de DNS para conexiones salientes."""
+    return set_dns_provider(provider)
+
+
+def test_internet_speed():
+    """Mide ping, descarga y subida contra la red de Cloudflare."""
+    return run_speedtest()

@@ -4,13 +4,92 @@ ThinkISP - Configuración Global y Constantes
 
 import os
 from pathlib import Path
+import subprocess
 
 # Nombres y perfiles de conexión
 HOTSPOT_CONN = "sputnik-hotspot"
 DEFAULT_SSID = "sputnik"
 DEFAULT_PSK = "123456789z"
-WLAN_IFACE = "wlan0"
-ETH_IFACE = "enp0s31f6"
+
+
+def detect_wlan_iface():
+    """Detecta automáticamente la interfaz Wi-Fi activa en cualquier distro Linux."""
+    if os.environ.get("THINKISP_WLAN"):
+        return os.environ["THINKISP_WLAN"]
+    # 1. Sysfs inspection
+    sys_net = Path("/sys/class/net")
+    if sys_net.exists():
+        for p in sorted(sys_net.iterdir()):
+            if (p / "wireless").exists() or (p / "phy80211").exists():
+                return p.name
+    # 2. NetworkManager query
+    try:
+        out = subprocess.check_output(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            dev, _, dtype = line.partition(":")
+            if dtype == "wifi":
+                return dev
+    except Exception:
+        pass
+    return "wlan0"
+
+
+def detect_eth_iface(wlan_iface="wlan0"):
+    """Detecta automáticamente la interfaz Ethernet/Upstream en cualquier laptop o distro."""
+    if os.environ.get("THINKISP_ETH"):
+        return os.environ["THINKISP_ETH"]
+    # 1. Default route interface (siempre que no sea wifi ni interfaz virtual)
+    try:
+        out = subprocess.check_output(
+            ["ip", "-4", "route", "show", "default"],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            parts = line.split()
+            if "dev" in parts:
+                idx = parts.index("dev")
+                if idx + 1 < len(parts):
+                    cand = parts[idx + 1]
+                    if cand != wlan_iface and not cand.startswith(
+                        ("tailscale", "docker", "virbr", "veth", "lo", "tun", "tap", "br-")
+                    ):
+                        return cand
+    except Exception:
+        pass
+    # 2. NetworkManager Ethernet
+    try:
+        out = subprocess.check_output(
+            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"],
+            text=True, stderr=subprocess.DEVNULL
+        )
+        for line in out.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected" and parts[0] != wlan_iface:
+                return parts[0]
+        for line in out.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "ethernet" and parts[0] != wlan_iface:
+                return parts[0]
+    except Exception:
+        pass
+    # 3. Sysfs búsqueda de Ethernet física
+    sys_net = Path("/sys/class/net")
+    if sys_net.exists():
+        for p in sorted(sys_net.iterdir()):
+            name = p.name
+            if name != wlan_iface and not name.startswith(
+                ("lo", "tailscale", "docker", "virbr", "veth", "tun", "tap", "br-")
+            ):
+                if not (p / "wireless").exists() and not (p / "phy80211").exists():
+                    return name
+    return "eth0"
+
+
+WLAN_IFACE = detect_wlan_iface()
+ETH_IFACE = detect_eth_iface(WLAN_IFACE)
 
 # Directorios de estado y datos
 STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "isp"
