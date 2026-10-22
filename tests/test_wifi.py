@@ -49,11 +49,12 @@ class TestHotspotLifecycle(unittest.TestCase):
     @patch("thinkisp.core.wifi.save_state")
     @patch("thinkisp.core.wifi.load_state")
     @patch("thinkisp.core.wifi.get_iface_bytes")
+    @patch("thinkisp.core.wifi.get_current_wifi_connection", return_value="Eduroam")
     @patch("thinkisp.core.wifi.apply_zero_latency_optimizations")
     @patch("thinkisp.core.wifi.run_cmd")
     @patch("thinkisp.core.wifi.is_hotspot_active")
     def test_start_hotspot_success(
-        self, mock_active, mock_run_cmd, mock_opt, mock_bytes, mock_load, mock_save, mock_notify
+        self, mock_active, mock_run_cmd, mock_opt, mock_prev_wifi, mock_bytes, mock_load, mock_save, mock_notify
     ):
         # First call False (pre-check), second call True (post nmcli up check)
         mock_active.side_effect = [False, True]
@@ -69,6 +70,7 @@ class TestHotspotLifecycle(unittest.TestCase):
         mock_save.assert_called_once()
         saved_state = mock_save.call_args[0][0]
         self.assertIn("session", saved_state)
+        self.assertEqual(saved_state.get("last_wifi"), "Eduroam")
         self.assertEqual(saved_state["session"]["start_rx"], 1000)
         self.assertEqual(saved_state["session"]["start_tx"], 2000)
         mock_notify.assert_called_once()
@@ -235,6 +237,8 @@ class TestClientInspection(unittest.TestCase):
         self.assertEqual(c1["tx_mbps"], 866.7)
         self.assertEqual(c1["rx_mbps"], 433.3)
         self.assertEqual(c1["conn_time"], 350)
+        self.assertEqual(c1["rx_bytes"], 1048576)
+        self.assertEqual(c1["tx_bytes"], 2097152)
 
         c2 = next(c for c in clients if c["mac"] == "aa:bb:cc:dd:ee:ff")
         self.assertEqual(c2["ip"], "10.42.0.25")

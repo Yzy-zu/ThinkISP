@@ -49,17 +49,17 @@ def build_parser():
 
     # 1 a 4: Telemetría & Monitoreo
     subparsers.add_parser("speed", help="Test de velocidad real (Ping, Descarga y Subida)")
-    subparsers.add_parser("top", help="Monitor interactivo de tráfico en vivo por dispositivo")
+    subparsers.add_parser("top", aliases=["watch"], help="Monitor interactivo de tráfico en vivo por dispositivo")
     subparsers.add_parser("stats", help="Contador de datos transferidos en la sesión")
-    widget_parser = subparsers.add_parser("widget", help="Salida JSON para Waybar / QuickShell")
+    widget_parser = subparsers.add_parser("widget", aliases=["json"], help="Salida JSON para Waybar / QuickShell")
     widget_parser.add_argument("-w", "--watch", action="store_true", help="Emitir actualizaciones continuas cada 2s")
 
     # 5 a 8: Seguridad & Control de Acceso
     kick_parser = subparsers.add_parser("kick", help="Expulsa y bloquea permanentemente a un intruso por IP o MAC")
     kick_parser.add_argument("target", help="IP o dirección MAC a bloquear")
-    unkick_parser = subparsers.add_parser("unkick", help="Desbloquea una dirección MAC")
+    unkick_parser = subparsers.add_parser("unkick", aliases=["unblock"], help="Desbloquea una dirección MAC")
     unkick_parser.add_argument("target", help="Dirección MAC a desbloquear")
-    subparsers.add_parser("blocked", help="Lista las direcciones MAC bloqueadas")
+    subparsers.add_parser("blocked", aliases=["banlist"], help="Lista las direcciones MAC bloqueadas")
     stealth_parser = subparsers.add_parser("stealth", help="Modo invisible (ocultar/mostrar SSID)")
     stealth_parser.add_argument("mode", choices=["on", "off", "status"], nargs="?", default="status", help="Activar o desactivar modo stealth")
     timer_parser = subparsers.add_parser("timer", help="Temporizador de apagado por tiempo o inactividad")
