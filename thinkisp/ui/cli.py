@@ -329,9 +329,19 @@ def cmd_top(args):
                 output.append(f"  {'-'*14} {'-'*17} {'-'*15} {'-'*13} {'-'*18}")
 
                 for mac, st in curr_stations.items():
-                    prev = prev_stations.get(mac, {"rx_bytes": 0, "tx_bytes": 0})
-                    down_str = f"{GREEN}Activo{RESET}"
-                    up_str = f"{BLUE}Activo{RESET}"
+                    prev = prev_stations.get(mac, {})
+                    down_str = "N/D"
+                    up_str = "N/D"
+                    if (
+                        st.get("rx_bytes") is not None
+                        and st.get("tx_bytes") is not None
+                        and prev.get("rx_bytes") is not None
+                        and prev.get("tx_bytes") is not None
+                    ):
+                        down_rate = max(0, (st["rx_bytes"] - prev["rx_bytes"]) / dt)
+                        up_rate = max(0, (st["tx_bytes"] - prev["tx_bytes"]) / dt)
+                        down_str = f"{GREEN}{format_bytes(down_rate)}/s{RESET}"
+                        up_str = f"{BLUE}{format_bytes(up_rate)}/s{RESET}"
                     sig_str = format_signal_bar(st["signal"])
                     output.append(f"  {st['ip']:<15} {mac:<18} {down_str:<25} {up_str:<23} {sig_str}")
 

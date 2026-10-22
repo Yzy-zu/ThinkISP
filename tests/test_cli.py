@@ -366,6 +366,12 @@ class TestCliParserRouting(unittest.TestCase):
         self.assertEqual(timer_args.command, "timer")
         self.assertEqual(timer_args.action_or_duration, "1h")
 
+        # Alias commands
+        self.assertEqual(parser.parse_args(["watch"]).command, "watch")
+        self.assertEqual(parser.parse_args(["json"]).command, "json")
+        self.assertEqual(parser.parse_args(["unblock", "00:11:22:33:44:55"]).command, "unblock")
+        self.assertEqual(parser.parse_args(["banlist"]).command, "banlist")
+
     @patch("main.cmd_on")
     def test_main_dispatch_on(self, mock_cmd_on):
         with patch("sys.argv", ["thinkisp", "on"]):

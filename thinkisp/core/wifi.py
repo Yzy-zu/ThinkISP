@@ -19,6 +19,7 @@ from thinkisp.config import (
 from thinkisp.core.network import (
     format_bytes,
     format_duration,
+    get_current_wifi_connection,
     get_ethernet_status,
     get_iface_bytes,
     is_hotspot_active,
@@ -105,10 +106,18 @@ def get_connected_clients():
                     "signal": None,
                     "tx_mbps": None,
                     "rx_mbps": None,
-                    "conn_time": None
+                    "conn_time": None,
+                    "rx_bytes": None,
+                    "tx_bytes": None,
                 }
                 continue
             if current_mac:
+                rx_b = re.search(r"rx bytes:\s+(\d+)", line)
+                if rx_b:
+                    stations[current_mac]["rx_bytes"] = int(rx_b.group(1))
+                tx_b = re.search(r"tx bytes:\s+(\d+)", line)
+                if tx_b:
+                    stations[current_mac]["tx_bytes"] = int(tx_b.group(1))
                 sig = re.search(r"signal:\s+(-?\d+)", line)
                 if sig:
                     stations[current_mac]["signal"] = int(sig.group(1))
@@ -145,7 +154,9 @@ def get_connected_clients():
             "signal": data["signal"],
             "tx_mbps": data["tx_mbps"],
             "rx_mbps": data["rx_mbps"],
-            "conn_time": data["conn_time"]
+            "conn_time": data["conn_time"],
+            "rx_bytes": data["rx_bytes"],
+            "tx_bytes": data["tx_bytes"],
         })
 
     return clients
@@ -176,6 +187,12 @@ def start_hotspot():
     if is_hotspot_active():
         return True, "El punto de acceso ya está activo."
 
+    state = load_state()
+    if not state.get("last_wifi"):
+        last_wifi = get_current_wifi_connection()
+        if last_wifi:
+            state["last_wifi"] = last_wifi
+
     up_res = run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
     if not is_hotspot_active():
         return False, f"Error al activar la conexión: {up_res}"
@@ -184,7 +201,6 @@ def start_hotspot():
 
     # Registrar estadísticas de inicio de sesión
     rx, tx = get_iface_bytes(WLAN_IFACE)
-    state = load_state()
     state["session"] = {
         "start_time": time.time(),
         "start_rx": rx,
