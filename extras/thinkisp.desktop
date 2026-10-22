@@ -1,16 +1,16 @@
 [Desktop Entry]
 Version=1.0
 Type=Application
-Name=ThinkISP
+Name=thinkISP
 GenericName=Gestor de Zona Wi-Fi Portátil
 GenericName[en]=Portable Wi-Fi Hotspot Manager
 Comment=Suite de Zona Wi-Fi y Router de Alto Rendimiento para Linux
 Comment[en]=High-performance Wi-Fi Hotspot & Portable Router Suite for Linux
 Icon=network-wireless-hotspot
-Exec=foot -a thinkisp -T thinkisp thinkisp
-Terminal=false
+Exec=thinkisp
+Terminal=true
 Categories=Network;System;Utility;
-Keywords=wifi;hotspot;router;thinkpad;network;internet;tui;share;
+Keywords=wifi;hotspot;router;network;internet;tui;share;
 StartupWMClass=thinkisp
 Actions=Toggle;On;Off;Boost;QR;
 
@@ -37,4 +37,4 @@ Exec=thinkisp boost
 [Desktop Action QR]
 Name=Mostrar Código QR
 Name[en]=Show QR Code
-Exec=foot -a thinkisp -T thinkisp thinkisp qr
+Exec=thinkisp qr

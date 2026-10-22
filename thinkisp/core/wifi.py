@@ -10,28 +10,36 @@ import subprocess
 import time
 
 from thinkisp.config import (
-    DEFAULT_PSK,
-    DEFAULT_SSID,
     HOTSPOT_CONN,
-    THINKPAD_MODE_BIN,
     WLAN_IFACE,
+    TIMER_FILE,
 )
 from thinkisp.core.network import (
     format_bytes,
     format_duration,
     get_ethernet_status,
     get_iface_bytes,
+    get_current_wifi_connection,
+    ThinkISPError,
     is_hotspot_active,
     load_state,
     notify,
     run_cmd,
     save_state,
+    state_lock,
 )
+from thinkisp.core.profile import (
+    apply_radio_settings, hotspot_details, inspect_capabilities, require_hotspot_profile, profile_uuid,
+)
+from thinkisp.core.access import apply_saved_blocks, clear_applied_blocks, set_client_block, blocked_clients
+from thinkisp.core.dns_state import apply_saved_dns, restore_dns
 
 
 def get_arp_map():
     """Obtiene el mapeo MAC -> IP de la interfaz Wi-Fi."""
     arp_map = {}
+    if not WLAN_IFACE:
+        return arp_map
     try:
         with open("/proc/net/arp") as f:
             for line in f.readlines()[1:]:
@@ -89,10 +97,14 @@ def parse_dhcp_leases(path=None):
     return leases
 
 
-def get_connected_clients():
+def get_connected_clients(check=False):
     """Obtiene los dispositivos conectados al hotspot con métricas en tiempo real."""
     clients = []
-    iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"])
+    if not WLAN_IFACE:
+        if check:
+            raise ThinkISPError("No se detectó un adaptador Wi-Fi.")
+        return clients
+    iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"], check=check)
     stations = {}
     if iw_out:
         current_mac = None
@@ -166,44 +178,94 @@ def format_signal_bar(dbm):
 
 
 def apply_zero_latency_optimizations():
-    """Desactiva Power Save en la tarjeta Wi-Fi y optimiza buffers de transmisión."""
-    run_cmd(["iw", "dev", WLAN_IFACE, "set", "power_save", "off"])
-    run_cmd(["ip", "link", "set", "dev", WLAN_IFACE, "txqueuelen", "2000"])
+    """Optimización explícita: no se ejecuta al iniciar ni promete latencia cero."""
+    if not WLAN_IFACE:
+        raise ThinkISPError("No se detectó una interfaz Wi-Fi.")
+    run_cmd(["iw", "dev", WLAN_IFACE, "set", "power_save", "off"], check=True)
 
 
 def start_hotspot():
-    """Inicia la conexión del hotspot y optimiza latencia."""
-    if is_hotspot_active():
-        return True, "El punto de acceso ya está activo."
-
-    up_res = run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-    if not is_hotspot_active():
-        return False, f"Error al activar la conexión: {up_res}"
-
-    apply_zero_latency_optimizations()
-
-    # Registrar estadísticas de inicio de sesión
+    """Preparar controles antes de abrir el AP y conservar recuperación previa."""
+    if is_hotspot_active(check=True):
+        profile = require_hotspot_profile()
+        apply_saved_blocks(profile)
+        apply_saved_dns(profile)
+        return True, "El punto de acceso ya está activo; controles reconciliados."
+    if not WLAN_IFACE:
+        raise ThinkISPError("No se detectó un adaptador Wi-Fi.")
+    profile = require_hotspot_profile()
+    pending = load_state().get('pending_start')
+    if pending:
+        if pending.get('profile_uuid') != profile:
+            raise ThinkISPError('Hay una recuperación pendiente de otro perfil. Selecciónalo y ejecuta thinkisp recover.')
+        errors = _cleanup_session(profile)
+        if errors:
+            raise ThinkISPError('; '.join(errors))
+    restore_dns(profile)
+    supported = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.AP", "device", "show", WLAN_IFACE], check=True)
+    if supported != "yes":
+        raise ThinkISPError(f"{WLAN_IFACE} no anuncia soporte para modo AP.")
+    previous_wifi = get_current_wifi_connection(check=True)
+    with state_lock() as state:
+        state['pending_start'] = {'profile_uuid': profile, 'previous_wifi': previous_wifi,
+                                  'activation_attempted': False}
+        save_state(state)
+    attempted = confirmed = False
+    try:
+        # Ingress filtra desde el primer paquete; no abrir antes de aplicar la lista.
+        apply_saved_blocks(profile)
+        with state_lock() as state:
+            state['pending_start']['activation_attempted'] = True
+            save_state(state)
+        attempted = True
+        run_cmd(["nmcli", "--wait", "60", "connection", "up", "uuid", profile,
+                 "ifname", WLAN_IFACE], check=True, timeout=65)
+        confirmed = is_hotspot_active(check=True)
+        if not confirmed:
+            raise ThinkISPError("NetworkManager no confirmó la activación del hotspot.")
+        apply_radio_settings(profile)
+        apply_saved_dns(profile)
+    except ThinkISPError as exc:
+        errors = []
+        may_clear_rules = True
+        try:
+            if confirmed or (attempted and profile in run_cmd(
+                    ['nmcli', '-g', 'UUID', 'connection', 'show', '--active'], check=True).splitlines()):
+                run_cmd(["nmcli", "connection", "down", "uuid", profile], check=True)
+        except ThinkISPError as cleanup:
+            errors.append(str(cleanup))
+            may_clear_rules = False  # Conservar bloqueos si no se confirmó el cierre.
+        errors.extend(_cleanup_session(profile, clear_firewall=may_clear_rules))
+        if errors:
+            raise ThinkISPError(f"{exc}. Recuperación pendiente: {'; '.join(errors)}") from exc
+        raise
     rx, tx = get_iface_bytes(WLAN_IFACE)
-    state = load_state()
-    state["session"] = {
-        "start_time": time.time(),
-        "start_rx": rx,
-        "start_tx": tx
-    }
-    save_state(state)
-
-    notify(
-        "🚀 Zona Wi-Fi 'sputnik' Activada",
-        f"SSID: {DEFAULT_SSID}\nClave: {DEFAULT_PSK}\n5GHz 80MHz | 0 Latencia",
-        icon="network-wireless-hotspot"
-    )
+    try:
+        with state_lock() as state:
+            if previous_wifi:
+                state["last_wifi"] = previous_wifi
+            else:
+                state.pop("last_wifi", None)
+            state.pop('pending_start', None)
+            state["session"] = {"start_time": time.time(), "start_rx": rx,
+                                "start_tx": tx, "profile_uuid": profile}
+            save_state(state)
+    except ThinkISPError as exc:
+        raise ThinkISPError(f"El hotspot está encendido, pero no se pudo registrar la sesión: {exc}") from exc
+    notify("thinkISP · Zona Wi-Fi activada", f"Interfaz: {WLAN_IFACE}", icon="network-wireless-hotspot")
     return True, "Zona Wi-Fi activada con éxito."
 
 
 def stop_hotspot():
     """Detiene la conexión del hotspot y restaura la red anterior."""
-    if not is_hotspot_active():
-        return True, "La zona Wi-Fi ya estaba inactiva."
+    profile = profile_uuid()
+    active = is_hotspot_active(check=True)
+    if not active:
+        TIMER_FILE.unlink(missing_ok=True)
+        errors = _cleanup_session(profile)
+        if errors:
+            raise ThinkISPError('Hotspot inactivo; recuperación pendiente: ' + '; '.join(errors))
+        return True, None
 
     state = load_state()
     session = state.get("session")
@@ -219,73 +281,81 @@ def stop_hotspot():
             "uploaded": uploaded,
             "end_time": time.time()
         }
-        state["last_session"] = session_summary
-        state.pop("session", None)
-
-    run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
-
-    # Restaurar perfil ThinkPad si se usó
-    prev_tp = state.get("prev_tp_mode")
-    if prev_tp and THINKPAD_MODE_BIN.exists():
-        try:
-            run_cmd([str(THINKPAD_MODE_BIN), prev_tp])
-            state.pop("prev_tp_mode", None)
-        except Exception:
-            pass
-
-    # Reconectar Wi-Fi previo
-    last_wifi = state.get("last_wifi")
-    if last_wifi:
-        run_cmd(["nmcli", "connection", "up", last_wifi])
-        state.pop("last_wifi", None)
-
-    save_state(state)
+    run_cmd(["nmcli", "connection", "down", "id", HOTSPOT_CONN], check=True)
+    if is_hotspot_active(check=True):
+        raise ThinkISPError("El hotspot continúa activo después de solicitar su apagado.")
+    TIMER_FILE.unlink(missing_ok=True)
+    errors = []
+    try:
+        with state_lock() as state:
+            if session_summary:
+                state["last_session"] = session_summary
+                state.pop("session", None)
+            save_state(state)
+    except ThinkISPError as exc:
+        errors.append(str(exc))
+    errors.extend(_cleanup_session(profile))
+    if errors:
+        raise ThinkISPError('Hotspot apagado; recuperación pendiente: ' + '; '.join(errors))
     notify("Zona Wi-Fi Apagada", "Punto de acceso desactivado y red previa restaurada.", icon="network-wireless")
     return True, session_summary
 
 
+def _cleanup_session(profile, clear_firewall=True):
+    """Intentar todas las restauraciones aunque falle una; conservar pendientes."""
+    errors = []
+    with state_lock() as state:
+        pending = state.get('pending_start', {})
+        if pending.get('profile_uuid') == profile and not pending.get('closing'):
+            pending['closing'] = True
+            save_state(state)
+    operations = [lambda: restore_dns(profile)]
+    if profile and clear_firewall:
+        operations.append(lambda: clear_applied_blocks(profile))
+    for operation in operations:
+        try:
+            operation()
+        except ThinkISPError as exc:
+            errors.append(str(exc))
+    try:
+        with state_lock() as state:
+            pending = state.get('pending_start', {})
+            previous = pending.get('previous_wifi') if pending.get('activation_attempted') else state.get('last_wifi')
+            if previous:
+                run_cmd(['nmcli', 'connection', 'up', 'id', previous], check=True, timeout=65)
+                state.pop('last_wifi', None)
+            if pending and pending.get('profile_uuid') == profile:
+                state.pop('pending_start', None)
+            if previous or pending:
+                save_state(state)
+    except ThinkISPError as exc:
+        errors.append(str(exc))
+    return errors
+
+
+def recover_network():
+    if is_hotspot_active(check=True):
+        raise ThinkISPError("Apaga el hotspot antes de recuperar el estado de red.")
+    TIMER_FILE.unlink(missing_ok=True)
+    errors = _cleanup_session(profile_uuid())
+    if errors:
+        raise ThinkISPError('; '.join(errors))
+    return True, 'DNS y conexión anterior recuperados; preferencias y lista de bloqueos conservadas.'
+
+
 def kick_client(target):
-    """Expulsa y bloquea permanentemente a un dispositivo por IP o MAC."""
-    target = target.strip()
-    target_mac = None
-
-    if re.match(r"^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$", target):
-        target_mac = target.lower()
-    else:
-        arp_map = get_arp_map()
-        for mac, ip in arp_map.items():
-            if ip == target:
-                target_mac = mac.lower()
-                break
-
-    if not target_mac:
-        return False, f"No se encontró ningún dispositivo con IP o MAC '{target}'."
-
-    run_cmd(["nmcli", "connection", "modify", HOTSPOT_CONN, "+802-11-wireless.mac-address-denylist", target_mac])
-    if is_hotspot_active():
-        run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-        apply_zero_latency_optimizations()
-
-    notify("🚫 Dispositivo Expulsado", f"Se bloqueó el acceso a: {target}\nMAC: {target_mac}", icon="network-wireless")
-    return True, f"Dispositivo {target_mac} ({target}) expulsado y bloqueado."
+    """Bloquea el acceso al equipo/router por IP o MAC y conserva la preferencia."""
+    return set_client_block(target, True)
 
 
 def unkick_client(target_mac):
     """Desbloquea una dirección MAC."""
-    target_mac = target_mac.strip().lower()
-    run_cmd(["nmcli", "connection", "modify", HOTSPOT_CONN, "-802-11-wireless.mac-address-denylist", target_mac])
-    if is_hotspot_active():
-        run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-        apply_zero_latency_optimizations()
-    return True, f"Dispositivo {target_mac} desbloqueado con éxito."
+    return set_client_block(target_mac, False)
 
 
 def get_blocked_clients():
     """Obtiene la lista de direcciones MAC bloqueadas."""
-    out = run_cmd(["nmcli", "-g", "802-11-wireless.mac-address-denylist", "connection", "show", HOTSPOT_CONN])
-    if not out:
-        return []
-    return [m.strip() for m in re.split(r"[,;\s]+", out) if m.strip()]
+    return blocked_clients()
 
 
 def get_stealth_mode():
@@ -297,41 +367,31 @@ def get_stealth_mode():
 def set_stealth_mode(enabled):
     """Activa o desactiva la visibilidad del SSID."""
     val = "yes" if enabled else "no"
-    run_cmd(["nmcli", "connection", "modify", HOTSPOT_CONN, "802-11-wireless.hidden", val])
+    run_cmd(["nmcli", "connection", "modify", "id", HOTSPOT_CONN, "802-11-wireless.hidden", val], check=True)
     if is_hotspot_active():
-        run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-        apply_zero_latency_optimizations()
+        run_cmd(["nmcli", "connection", "up", "id", HOTSPOT_CONN], check=True, timeout=65)
+        apply_radio_settings(require_hotspot_profile())
     return True
 
 
 def set_band(band):
-    """Configura la banda en 5G (Canal 149), 2.4G (Canal 6) o Auto."""
-    band = band.lower()
-    if band in ("5g", "5ghz", "5"):
-        run_cmd([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "802-11-wireless.band", "a",
-            "802-11-wireless.channel", "149"
-        ])
-    elif band in ("2.4g", "2.4ghz", "2.4", "2"):
-        run_cmd([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "802-11-wireless.band", "bg",
-            "802-11-wireless.channel", "6"
-        ])
-    elif band in ("auto", "default", "any"):
-        run_cmd([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "802-11-wireless.band", "",
-            "802-11-wireless.channel", "0"
-        ])
-    else:
-        return False, "Banda no válida. Usa 5g, 2.4g o auto."
-
+    """Selecciona una banda disponible; NetworkManager elige el canal."""
+    aliases = {"5g": "a", "5": "a", "2.4g": "bg", "2.4": "bg", "auto": ""}
+    if band not in aliases:
+        raise ThinkISPError("Banda no válida. Usa 'thinkisp setup' para consultar las disponibles.")
+    selected = aliases[band]
+    caps = inspect_capabilities()
+    if selected and selected not in caps.bands:
+        raise ThinkISPError("La tarjeta no anuncia canales AP disponibles en esa banda.")
+    args = ["nmcli", "connection", "modify", "id", HOTSPOT_CONN,
+            "802-11-wireless.band", selected, "802-11-wireless.channel", "0"]
+    if caps.optional.get("802-11-wireless.channel-width"):
+        args += ["802-11-wireless.channel-width", "auto"]
+    run_cmd(args, check=True)
     if is_hotspot_active():
-        run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-        apply_zero_latency_optimizations()
-    return True, f"Banda cambiada a {band}."
+        run_cmd(["nmcli", "connection", "up", "id", HOTSPOT_CONN], check=True, timeout=65)
+        apply_radio_settings(require_hotspot_profile())
+    return True, f"Banda configurada: {band}; selección automática del canal."
 
 
 def optimize_low_latency():
@@ -339,9 +399,18 @@ def optimize_low_latency():
     return apply_zero_latency_optimizations()
 
 
-def get_qr_ascii(ssid=DEFAULT_SSID, psk=DEFAULT_PSK):
+def wifi_qr_payload(ssid, psk, hidden=False, security="wpa-psk"):
+    def escape(value):
+        return re.sub(r'([\\;,:\"])', r'\\\1', value)
+    auth = "SAE" if security == "sae" else "WPA"
+    return f"WIFI:S:{escape(ssid)};T:{auth};P:{escape(psk)};" + ("H:true;" if hidden else "") + ";"
+
+
+def get_qr_ascii(ssid=None, psk=None):
     """Genera representación del código QR en ASCII / UTF-8 para conexión Wi-Fi rápida."""
-    wifi_str = f"WIFI:S:{ssid};T:WPA;P:{psk};;"
+    data = hotspot_details(secrets=True) if ssid is None or psk is None else {}
+    ssid, psk = data.get("ssid", ssid), data.get("psk", psk)
+    wifi_str = wifi_qr_payload(ssid, psk, data.get("hidden", False), data.get("security", "wpa-psk"))
     if shutil.which("qrencode"):
         out = run_cmd(["qrencode", "-t", "UTF8", wifi_str])
         if out:

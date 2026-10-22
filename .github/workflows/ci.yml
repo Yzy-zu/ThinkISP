@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
 
     steps:
       - name: Checkout repository
@@ -31,3 +31,39 @@ jobs:
       - name: Run unit tests
         run: |
           python3 tests/run_tests.py
+
+      - name: Build and install wheel in isolation
+        run: |
+          python -m pip install 'setuptools>=61' wheel
+          python tests/integration/package_roundtrip.py
+
+      - name: Test real curses without network changes
+        env:
+          THINKISP_WLAN: fixture-wifi
+          THINKISP_ETH: fixture-upstream
+        run: python tests/integration/tui_roundtrip.py
+
+  networkmanager:
+    name: Offline NetworkManager · ${{ matrix.image }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:bookworm', 'debian:trixie', 'ubuntu:24.04']
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install distribution tools
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y python3 network-manager iw iproute2 bash fish zsh desktop-file-utils
+      - name: Verify offline profiles and unit tests without a network daemon
+        env:
+          THINKISP_WLAN: fixture-wifi
+          THINKISP_ETH: fixture-upstream
+        run: |
+          python3 tests/run_tests.py
+          python3 tests/integration/nmcli_offline.py
+          bash -n install.sh extras/completions/thinkisp.bash
+          fish -n extras/completions/thinkisp.fish
+          zsh -n extras/completions/_thinkisp

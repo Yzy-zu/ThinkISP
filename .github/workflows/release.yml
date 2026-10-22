@@ -22,26 +22,28 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Test before packaging
+        run: python3 -m unittest discover -s tests
+
       - name: Build release tarball
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
         run: |
-          VERSION="${{ github.ref_name }}"
-          ARCHIVE_NAME="thinkisp-${VERSION}.tar.gz"
+          ARCHIVE_NAME="thinkisp-${RELEASE_VERSION}.tar.gz"
           echo "Packaging $ARCHIVE_NAME..."
-          tar -czf "$ARCHIVE_NAME" \
-            --exclude='.git' \
-            --exclude='.github' \
+          tar -czf "$RUNNER_TEMP/$ARCHIVE_NAME" \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
-            --exclude='.pytest_cache' \
-            .
+            main.py thinkisp extras tests docs install.sh pyproject.toml README.md LICENSE CONTRIBUTING.md
+          cd "$RUNNER_TEMP"
           sha256sum "$ARCHIVE_NAME" > "${ARCHIVE_NAME}.sha256"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            thinkisp-${{ github.ref_name }}.tar.gz
-            thinkisp-${{ github.ref_name }}.tar.gz.sha256
+            ${{ runner.temp }}/thinkisp-${{ github.ref_name }}.tar.gz
+            ${{ runner.temp }}/thinkisp-${{ github.ref_name }}.tar.gz.sha256
           generate_release_notes: true
           draft: false
           prerelease: false

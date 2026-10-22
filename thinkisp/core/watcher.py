@@ -23,8 +23,9 @@ from thinkisp.core.network import (
     is_hotspot_active,
     notify,
     run_cmd,
+    ThinkISPError,
 )
-from thinkisp.core.wifi import get_arp_map, get_hostname_for_ip
+from thinkisp.core.wifi import get_arp_map, get_hostname_for_ip, stop_hotspot
 
 
 def start_daemon():
@@ -34,7 +35,8 @@ def start_daemon():
         try:
             old_pid = int(DAEMON_PID_FILE.read_text().strip())
             os.kill(old_pid, 0)
-            return
+            if b'thinkisp.core.watcher' in Path(f'/proc/{old_pid}/cmdline').read_bytes():
+                return
         except (OSError, ValueError):
             pass
 
@@ -43,7 +45,8 @@ def start_daemon():
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         stdin=subprocess.DEVNULL,
-        start_new_session=True
+        start_new_session=True,
+        env={**os.environ, 'THINKISP_NO_AUTH': '1'},
     )
     DAEMON_PID_FILE.write_text(str(proc.pid))
 
@@ -53,7 +56,9 @@ def stop_daemon():
     if DAEMON_PID_FILE.exists():
         try:
             pid = int(DAEMON_PID_FILE.read_text().strip())
-            os.kill(pid, 15)
+            command = Path(f"/proc/{pid}/cmdline").read_bytes()
+            if b"thinkisp.core.watcher" in command and pid != os.getpid():
+                os.kill(pid, 15)
         except (OSError, ValueError):
             pass
         try:
@@ -103,7 +108,7 @@ def set_timer_idle(minutes):
 def cancel_timer():
     """Cancela cualquier temporizador activo."""
     TIMER_FILE.unlink(missing_ok=True)
-    notify("Temporizador Cancelado", "El hotspot continuará encendido.")
+    notify("Temporizador Cancelado", "Se eliminó el apagado programado.")
     return True, "Temporizador cancelado con éxito."
 
 
@@ -146,7 +151,7 @@ class HotspotWatcher:
 
     def scan_clients(self):
         """Escanea estaciones conectadas y detecta clientes nuevos o desconectados."""
-        iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"])
+        iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"], check=True)
         curr_macs = set()
         if iw_out:
             for line in iw_out.splitlines():
@@ -207,12 +212,12 @@ class HotspotWatcher:
             if end_time:
                 rem = end_time - curr_time
                 if rem <= 0:
+                    stop_hotspot()
                     res["action"] = "shutdown_timer"
                     for cb in self.on_timer_expired:
                         cb(timer_data)
                     notify("⏰ Temporizador Finalizado", "El tiempo programado concluyó. Zona Wi-Fi apagada.", icon="network-wireless")
                     self.timer_file.unlink(missing_ok=True)
-                    run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
                     return res
                 elif rem <= 300 and not timer_data.get("warned_5m"):
                     res["action"] = "warn_5m"
@@ -227,18 +232,21 @@ class HotspotWatcher:
                 if len(self.known_macs) == 0:
                     self.idle_seconds += self.check_interval
                     if self.idle_seconds >= idle_timeout:
+                        stop_hotspot()
                         mins = idle_timeout // 60
                         res["action"] = "shutdown_idle"
                         for cb in self.on_idle_expired:
                             cb(timer_data)
                         notify("🔋 Apagado por Inactividad", f"No hubo dispositivos conectados en {mins} min. Hotspot apagado.", icon="network-wireless")
                         self.timer_file.unlink(missing_ok=True)
-                        run_cmd(["nmcli", "connection", "down", HOTSPOT_CONN])
                         return res
                 else:
                     self.idle_seconds = 0
 
             return res
+        except ThinkISPError as exc:
+            notify("thinkISP · Error de temporizador", str(exc), urgency="critical")
+            return {"action": "error", "error": str(exc)}
         except Exception:
             return None
 
@@ -258,7 +266,11 @@ def run_daemon_loop():
 
     while True:
         try:
-            if not is_hotspot_active():
+            if not is_hotspot_active(check=True):
+                try:
+                    stop_hotspot()
+                except ThinkISPError as exc:
+                    notify('thinkISP · Recuperación pendiente', str(exc), urgency='critical')
                 break
 
             tick_res = watcher.tick()
@@ -269,7 +281,12 @@ def run_daemon_loop():
         except Exception:
             time.sleep(2.0)
 
-    stop_daemon()
+    # La salida natural limpia el archivo; no enviar SIGTERM al propio proceso.
+    try:
+        if DAEMON_PID_FILE.read_text().strip() == str(os.getpid()):
+            DAEMON_PID_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 if __name__ == "__main__":

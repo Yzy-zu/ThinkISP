@@ -1,7 +1,7 @@
 # Contribuyendo a ThinkISP / Contributing to ThinkISP
 
 ¡Gracias por tu interés en contribuir a **ThinkISP**!  
-ThinkISP es una suite de alto rendimiento para convertir laptops Linux en routers portátiles optimizados para ultra baja latencia, cero pérdida de paquetes y máxima velocidad.
+thinkISP permite configurar puntos de acceso en Linux según las capacidades reales del equipo y de NetworkManager. Los cambios deben consultar las capacidades del sistema, comprobar los errores y evitar asumir hardware, interfaces o parámetros de radio concretos.
 
 ---
 
@@ -24,7 +24,7 @@ Por favor mantén un trato respetuoso, constructivo y colaborativo con todos los
 ## 🛠️ Cómo Empezar
 
 ### Requisitos Previos
-- **Python 3.9** o superior.
+- **Linux, Python 3.9** o superior y **NetworkManager 1.40+** (`nmcli --offline`).
 - **Herramientas de red Linux estándar**: `nmcli`, `iw`, `ip`, `tc`, `ethtool` (opcional: `qrencode`, `dig`, `notify-send`).
 - **Git**.
 
@@ -48,7 +48,7 @@ python3 main.py --help
 ## 🎨 Estilo de Código y Estándares
 
 - **PEP 8**: Sigue las guías de estilo oficiales de Python.
-- **Compatibilidad**: Todo el código debe ser compatible con Python 3.9 a 3.13+.
+- **Compatibilidad**: Todo el código debe ser compatible con Python 3.9 a 3.14+.
 - **Sin Dependencias Pesadas**: Mantén la arquitectura ligera basada en la biblioteca estándar de Python (`argparse`, `curses`, `subprocess`, `socket`, `json`, `pathlib`).
 - **Tratamiento de Errores**: Maneja de forma segura las excepciones cuando las herramientas del sistema (`nmcli`, `iw`) no estén presentes o fallen.
 - **Mensajes de Commit**: Usa el formato [Conventional Commits](https://www.conventionalcommits.org/):
@@ -101,6 +101,8 @@ Si agregas nuevos subcomandos, banderas o argumentos al CLI en `main.py`, recuer
    git push origin feat/mi-nueva-caracteristica
    ```
 5. Abre un **Pull Request** hacia la rama `main` del repositorio oficial.
-6. La integración continua de GitHub Actions validará automáticamente tu código en múltiples versiones de Python (3.9 - 3.13).
+6. La integración continua de GitHub Actions validará automáticamente tu código en múltiples versiones de Python (3.9 - 3.14).
 
 ¡Agradecemos mucho tus contribuciones para hacer de ThinkISP la mejor suite de Wi-Fi hotspot en Linux!
+
+Las comprobaciones de compatibilidad se documentan en [docs/compatibility.md](docs/compatibility.md). Las pruebas de perfiles deben usar `--offline`; las pruebas de tráfico requieren redes virtuales aisladas.

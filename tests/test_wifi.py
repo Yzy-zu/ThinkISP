@@ -14,7 +14,9 @@ THINKISP_ROOT = Path(__file__).resolve().parent.parent
 if str(THINKISP_ROOT) not in sys.path:
     sys.path.insert(0, str(THINKISP_ROOT))
 
-from thinkisp.config import DEFAULT_PSK, DEFAULT_SSID, HOTSPOT_CONN, WLAN_IFACE
+from thinkisp.config import HOTSPOT_CONN
+WLAN_IFACE = "wifi-test"
+from thinkisp.core.network import CommandError, ThinkISPError
 from thinkisp.core.wifi import (
     apply_zero_latency_optimizations,
     format_signal_bar,
@@ -36,100 +38,166 @@ from thinkisp.core.wifi import (
 
 
 class TestHotspotLifecycle(unittest.TestCase):
-    """Tests for starting and stopping the Wi-Fi hotspot."""
+    def setUp(self):
+        from contextlib import ExitStack
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch('thinkisp.core.wifi.WLAN_IFACE', 'wifi-test'))
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.stack.enter_context(patch('thinkisp.core.wifi.TIMER_FILE', Path(self.directory.name) / 'timer.json'))
+        self.active = self.stack.enter_context(patch('thinkisp.core.wifi.is_hotspot_active', side_effect=[False, True]))
+        self.run = self.stack.enter_context(patch('thinkisp.core.wifi.run_cmd', return_value='yes'))
+        self.stack.enter_context(patch('thinkisp.core.wifi.require_hotspot_profile', return_value='profile-uuid'))
+        self.radio = self.stack.enter_context(patch('thinkisp.core.wifi.apply_radio_settings'))
+        self.stack.enter_context(patch('thinkisp.core.wifi.get_current_wifi_connection', return_value='Previous WiFi'))
+        self.stack.enter_context(patch('thinkisp.core.wifi.get_iface_bytes', return_value=(15000, 28000)))
+        self.load = self.stack.enter_context(patch('thinkisp.core.wifi.load_state', return_value={}))
+        self.save = self.stack.enter_context(patch('thinkisp.core.wifi.save_state'))
+        self.notify = self.stack.enter_context(patch('thinkisp.core.wifi.notify'))
+        from contextlib import nullcontext
+        self.stack.enter_context(patch('thinkisp.core.wifi.state_lock', side_effect=lambda: nullcontext(self.load.return_value)))
+        self.stack.enter_context(patch('thinkisp.core.wifi.profile_uuid', return_value='profile-uuid'))
+        for operation in ('restore_dns', 'apply_saved_dns', 'apply_saved_blocks', 'clear_applied_blocks'):
+            self.stack.enter_context(patch('thinkisp.core.wifi.' + operation))
 
-    @patch("thinkisp.core.wifi.is_hotspot_active")
-    def test_start_hotspot_already_active(self, mock_active):
-        mock_active.return_value = True
-        success, msg = start_hotspot()
-        self.assertTrue(success)
-        self.assertIn("ya está activo", msg)
 
-    @patch("thinkisp.core.wifi.notify")
-    @patch("thinkisp.core.wifi.save_state")
-    @patch("thinkisp.core.wifi.load_state")
-    @patch("thinkisp.core.wifi.get_iface_bytes")
-    @patch("thinkisp.core.wifi.apply_zero_latency_optimizations")
-    @patch("thinkisp.core.wifi.run_cmd")
-    @patch("thinkisp.core.wifi.is_hotspot_active")
-    def test_start_hotspot_success(
-        self, mock_active, mock_run_cmd, mock_opt, mock_bytes, mock_load, mock_save, mock_notify
-    ):
-        # First call False (pre-check), second call True (post nmcli up check)
-        mock_active.side_effect = [False, True]
-        mock_run_cmd.return_value = "Connection successfully activated"
-        mock_bytes.return_value = (1000, 2000)
-        mock_load.return_value = {}
+    def test_start_preserves_previous_wifi_and_records_session(self):
+        ok, message = start_hotspot()
+        self.assertTrue(ok)
+        state = self.save.call_args.args[0]
+        self.assertEqual(state['last_wifi'], 'Previous WiFi')
+        self.assertEqual(state['session']['start_rx'], 15000)
+        self.radio.assert_called_once_with('profile-uuid')
+        self.assertIn('activada con éxito', message)
 
-        success, msg = start_hotspot()
-        self.assertTrue(success)
-        self.assertIn("activada con éxito", msg)
-        mock_run_cmd.assert_called_with(["nmcli", "connection", "up", HOTSPOT_CONN])
-        mock_opt.assert_called_once()
-        mock_save.assert_called_once()
-        saved_state = mock_save.call_args[0][0]
-        self.assertIn("session", saved_state)
-        self.assertEqual(saved_state["session"]["start_rx"], 1000)
-        self.assertEqual(saved_state["session"]["start_tx"], 2000)
-        mock_notify.assert_called_once()
+    def test_start_already_active_does_not_modify_profile(self):
+        self.active.side_effect = None
+        self.active.return_value = True
+        self.assertTrue(start_hotspot()[0])
+        self.run.assert_not_called()
+        self.save.assert_not_called()
 
-    @patch("thinkisp.core.wifi.run_cmd")
-    @patch("thinkisp.core.wifi.is_hotspot_active")
-    def test_start_hotspot_failure(self, mock_active, mock_run_cmd):
-        mock_active.return_value = False
-        mock_run_cmd.return_value = "Error: Connection activation failed"
+    def test_start_permission_error_keeps_state_and_no_success_notification(self):
+        def denied(args, **kwargs):
+            if 'up' in args and 'uuid' in args:
+                raise CommandError(['nmcli'], 'Permission denied', 4)
+            return 'yes'
+        self.run.side_effect = denied
+        with self.assertRaisesRegex(CommandError, 'Permission denied'):
+            start_hotspot()
+        self.assertNotIn('session', self.load.return_value)
+        self.notify.assert_not_called()
 
-        success, msg = start_hotspot()
-        self.assertFalse(success)
-        self.assertIn("Error al activar", msg)
+    def test_start_rejects_adapter_without_ap(self):
+        self.run.return_value = 'no'
+        with self.assertRaisesRegex(ThinkISPError, 'soporte'):
+            start_hotspot()
+        self.assertEqual(self.run.call_count, 1)
+        self.assertNotIn('session', self.load.return_value)
 
-    @patch("thinkisp.core.wifi.is_hotspot_active")
-    def test_stop_hotspot_already_inactive(self, mock_active):
-        mock_active.return_value = False
-        success, summary = stop_hotspot()
-        self.assertTrue(success)
-        self.assertEqual(summary, "La zona Wi-Fi ya estaba inactiva.")
+    def test_unconfirmed_activation_is_error(self):
+        self.active.side_effect = [False, False]
+        with self.assertRaisesRegex(ThinkISPError, 'confirmó'):
+            start_hotspot()
+        self.assertNotIn('session', self.load.return_value)
+        self.notify.assert_not_called()
 
-    @patch("thinkisp.core.wifi.notify")
-    @patch("thinkisp.core.wifi.save_state")
-    @patch("thinkisp.core.wifi.load_state")
-    @patch("thinkisp.core.wifi.get_iface_bytes")
-    @patch("thinkisp.core.wifi.run_cmd")
-    @patch("thinkisp.core.wifi.is_hotspot_active")
-    def test_stop_hotspot_success_with_session(
-        self, mock_active, mock_run_cmd, mock_bytes, mock_load, mock_save, mock_notify
-    ):
-        mock_active.return_value = True
-        mock_load.return_value = {
-            "session": {"start_time": 1000.0, "start_rx": 5000, "start_tx": 8000},
-            "last_wifi": "Home-Network",
-        }
-        mock_bytes.return_value = (15000, 28000)  # uploaded = 10000, downloaded = 20000
+    def test_radio_failure_turns_ap_off_and_restores_previous_wifi(self):
+        self.radio.side_effect = CommandError(['iw'], 'not permitted')
+        with self.assertRaises(CommandError):
+            start_hotspot()
+        commands = [call.args[0] for call in self.run.call_args_list]
+        self.assertIn(['nmcli', 'connection', 'down', 'uuid', 'profile-uuid'], commands)
+        self.assertIn(['nmcli', 'connection', 'up', 'id', 'Previous WiFi'], commands)
+        self.assertNotIn('session', self.load.return_value)
 
-        with patch("time.time", return_value=1120.0):
-            success, summary = stop_hotspot()
+    def test_stop_failure_does_not_end_session(self):
+        self.active.side_effect = None
+        self.active.return_value = True
+        original = {'session': {'start_time': 1000, 'start_rx': 5000, 'start_tx': 8000}}
+        self.load.return_value = original
+        self.run.side_effect = CommandError(['nmcli'], 'not authorized')
+        with self.assertRaises(CommandError):
+            stop_hotspot()
+        self.assertIn('session', original)
+        self.save.assert_not_called()
+        self.notify.assert_not_called()
 
-        self.assertTrue(success)
-        self.assertIsInstance(summary, dict)
-        self.assertEqual(summary["duration"], 120.0)
-        self.assertEqual(summary["downloaded"], 20000)
-        self.assertEqual(summary["uploaded"], 10000)
+    def test_stop_success_ends_session_and_restores_wifi(self):
+        self.active.side_effect = [True, False]
+        self.load.return_value = {'session': {'start_time': 1000, 'start_rx': 5000, 'start_tx': 8000}, 'last_wifi': 'Previous WiFi'}
+        with patch('thinkisp.core.wifi.time.time', return_value=1120):
+            ok, summary = stop_hotspot()
+        self.assertTrue(ok)
+        self.assertEqual(summary['downloaded'], 20000)
+        self.assertEqual(summary['uploaded'], 10000)
+        self.assertEqual(summary['duration'], 120)
+        self.assertNotIn('session', self.save.call_args.args[0])
+        self.assertNotIn('last_wifi', self.save.call_args.args[0])
 
-        # Asserts connection down called
-        mock_run_cmd.assert_any_call(["nmcli", "connection", "down", HOTSPOT_CONN])
-        # Asserts previous wifi reconnected
-        mock_run_cmd.assert_any_call(["nmcli", "connection", "up", "Home-Network"])
-        mock_notify.assert_called_once()
+    def test_stop_still_active_does_not_announce_success(self):
+        self.active.side_effect = [True, True]
+        with self.assertRaisesRegex(ThinkISPError, 'continúa activo'):
+            stop_hotspot()
+        self.save.assert_not_called()
+        self.notify.assert_not_called()
+
+    def test_stop_already_inactive_returns_no_summary(self):
+        self.active.side_effect = None
+        self.active.return_value = False
+        self.assertEqual(stop_hotspot(), (True, None))
+        self.run.assert_not_called()
+
+    def test_stop_dns_failure_still_clears_rules_timer_and_restores_wifi(self):
+        self.active.side_effect = [True, False]
+        self.load.return_value = {'last_wifi': 'Previous WiFi'}
+        timer = Path(self.directory.name) / 'timer.json'
+        timer.write_text('{}')
+        with patch('thinkisp.core.wifi.restore_dns', side_effect=ThinkISPError('DNS conflict')), \
+             patch('thinkisp.core.wifi.clear_applied_blocks') as clear:
+            with self.assertRaisesRegex(ThinkISPError, 'DNS conflict'):
+                stop_hotspot()
+        clear.assert_called_once_with('profile-uuid')
+        self.assertFalse(timer.exists())
+        self.assertIn(call(['nmcli', 'connection', 'up', 'id', 'Previous WiFi'], check=True, timeout=65), self.run.call_args_list)
+        self.notify.assert_not_called()
+
+    def test_stop_session_save_failure_still_attempts_network_recovery(self):
+        self.active.side_effect = [True, False]
+        self.save.side_effect = ThinkISPError('disk full')
+        with patch('thinkisp.core.wifi.restore_dns') as restore, \
+             patch('thinkisp.core.wifi.clear_applied_blocks') as clear:
+            with self.assertRaisesRegex(ThinkISPError, 'disk full'):
+                stop_hotspot()
+        restore.assert_called_once_with('profile-uuid')
+        clear.assert_called_once_with('profile-uuid')
+
+    def test_rules_are_applied_before_hotspot_activation(self):
+        events = []
+        def command(args, **kwargs):
+            if 'up' in args:
+                events.append('activate')
+            return 'yes'
+        self.run.side_effect = command
+        with patch('thinkisp.core.wifi.apply_saved_blocks', side_effect=lambda _: events.append('filter')):
+            start_hotspot()
+        self.assertEqual(events[:2], ['filter', 'activate'])
 
 
 class TestWifiOptimizations(unittest.TestCase):
     """Tests for low-latency tuning and QR generation."""
 
+    def setUp(self):
+        selected = patch("thinkisp.core.wifi.WLAN_IFACE", WLAN_IFACE)
+        selected.start()
+        self.addCleanup(selected.stop)
+
     @patch("thinkisp.core.wifi.run_cmd")
     def test_optimize_low_latency(self, mock_run_cmd):
         optimize_low_latency()
-        mock_run_cmd.assert_any_call(["iw", "dev", WLAN_IFACE, "set", "power_save", "off"])
-        mock_run_cmd.assert_any_call(["ip", "link", "set", "dev", WLAN_IFACE, "txqueuelen", "2000"])
+        mock_run_cmd.assert_any_call(["iw", "dev", WLAN_IFACE, "set", "power_save", "off"], check=True)
+        self.assertEqual(mock_run_cmd.call_count, 1)
 
     @patch("shutil.which")
     @patch("thinkisp.core.wifi.run_cmd")
@@ -150,6 +218,11 @@ class TestWifiOptimizations(unittest.TestCase):
 
 class TestClientInspection(unittest.TestCase):
     """Tests for connected clients parsing station dumps and DHCP leases."""
+
+    def setUp(self):
+        selected = patch("thinkisp.core.wifi.WLAN_IFACE", WLAN_IFACE)
+        selected.start()
+        self.addCleanup(selected.stop)
 
     def test_parse_dhcp_leases(self):
         with tempfile.NamedTemporaryFile("w+", delete=False) as f:
@@ -243,126 +316,51 @@ class TestClientInspection(unittest.TestCase):
 
 
 class TestClientAccessControl(unittest.TestCase):
-    """Tests for kick, unkick, denylist, stealth mode, and bands."""
+    def test_access_control_uses_the_firewall_backend(self):
+        with patch('thinkisp.core.wifi.set_client_block', return_value=(True, 'saved')) as backend:
+            self.assertTrue(kick_client('02:00:00:00:00:01')[0])
+            backend.assert_called_with('02:00:00:00:00:01', True)
+            self.assertTrue(unkick_client('02:00:00:00:00:01')[0])
+            backend.assert_called_with('02:00:00:00:00:01', False)
 
-    @patch("thinkisp.core.wifi.notify")
-    @patch("thinkisp.core.wifi.apply_zero_latency_optimizations")
-    @patch("thinkisp.core.wifi.is_hotspot_active", return_value=True)
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_kick_client_by_mac(self, mock_run_cmd, mock_active, mock_opt, mock_notify):
-        success, msg = kick_client("00:11:22:33:44:55")
-        self.assertTrue(success)
-        self.assertIn("expulsado y bloqueado", msg)
-        mock_run_cmd.assert_any_call([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "+802-11-wireless.mac-address-denylist", "00:11:22:33:44:55"
-        ])
-        mock_run_cmd.assert_any_call(["nmcli", "connection", "up", HOTSPOT_CONN])
-        mock_opt.assert_called_once()
-        mock_notify.assert_called_once()
-
-    @patch("thinkisp.core.wifi.get_arp_map")
-    @patch("thinkisp.core.wifi.notify")
-    @patch("thinkisp.core.wifi.is_hotspot_active", return_value=False)
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_kick_client_by_ip(self, mock_run_cmd, mock_active, mock_notify, mock_arp):
-        mock_arp.return_value = {"aa:bb:cc:dd:ee:ff": "10.42.0.77"}
-        success, msg = kick_client("10.42.0.77")
-        self.assertTrue(success)
-        mock_run_cmd.assert_called_once_with([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "+802-11-wireless.mac-address-denylist", "aa:bb:cc:dd:ee:ff"
-        ])
-
-    @patch("thinkisp.core.wifi.get_arp_map", return_value={})
-    def test_kick_client_not_found(self, mock_arp):
-        success, msg = kick_client("10.42.0.99")
-        self.assertFalse(success)
-        self.assertIn("No se encontró", msg)
-
-    @patch("thinkisp.core.wifi.apply_zero_latency_optimizations")
-    @patch("thinkisp.core.wifi.is_hotspot_active", return_value=True)
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_unkick_client(self, mock_run_cmd, mock_active, mock_opt):
-        success, msg = unkick_client("00:11:22:33:44:55")
-        self.assertTrue(success)
-        self.assertIn("desbloqueado con éxito", msg)
-        mock_run_cmd.assert_any_call([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "-802-11-wireless.mac-address-denylist", "00:11:22:33:44:55"
-        ])
-
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_get_blocked_clients(self, mock_run_cmd):
-        mock_run_cmd.return_value = "00:11:22:33:44:55, aa:bb:cc:dd:ee:ff"
-        blocked = get_blocked_clients()
-        self.assertEqual(blocked, ["00:11:22:33:44:55", "aa:bb:cc:dd:ee:ff"])
-
-        mock_run_cmd.return_value = ""
-        self.assertEqual(get_blocked_clients(), [])
-
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_get_stealth_mode(self, mock_run_cmd):
-        mock_run_cmd.return_value = "yes"
+    @patch('thinkisp.core.wifi.run_cmd', return_value='yes')
+    def test_stealth_reads_profile_setting(self, run):
         self.assertTrue(get_stealth_mode())
-        mock_run_cmd.return_value = "sí"
-        self.assertTrue(get_stealth_mode())
-        mock_run_cmd.return_value = "no"
+        run.return_value = 'no'
         self.assertFalse(get_stealth_mode())
 
-    @patch("thinkisp.core.wifi.apply_zero_latency_optimizations")
-    @patch("thinkisp.core.wifi.is_hotspot_active", return_value=True)
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_set_stealth_mode(self, mock_run_cmd, mock_active, mock_opt):
-        self.assertTrue(set_stealth_mode(True))
-        mock_run_cmd.assert_any_call(["nmcli", "connection", "modify", HOTSPOT_CONN, "802-11-wireless.hidden", "yes"])
+    @patch('thinkisp.core.wifi.is_hotspot_active', return_value=False)
+    @patch('thinkisp.core.wifi.run_cmd')
+    def test_stealth_failure_propagates(self, run, active):
+        run.side_effect = CommandError(['nmcli'], 'denied')
+        with self.assertRaises(CommandError):
+            set_stealth_mode(True)
 
-        self.assertTrue(set_stealth_mode(False))
-        mock_run_cmd.assert_any_call(["nmcli", "connection", "modify", HOTSPOT_CONN, "802-11-wireless.hidden", "no"])
+    def test_band_uses_supported_channels_without_forcing_channel(self):
+        from thinkisp.core.profile import Capabilities, Channel
+        caps = Capabilities('wifi-test', 'phy9', 'driver-test', [Channel(1, 2412, 18)])
+        with patch('thinkisp.core.wifi.inspect_capabilities', return_value=caps), \
+             patch('thinkisp.core.wifi.is_hotspot_active', return_value=False), \
+             patch('thinkisp.core.wifi.run_cmd') as run:
+            with self.assertRaises(ThinkISPError):
+                set_band('5g')
+            run.assert_not_called()
+            self.assertTrue(set_band('2.4g')[0])
+            self.assertEqual(run.call_args.args[0][-4:], ['802-11-wireless.band', 'bg', '802-11-wireless.channel', '0'])
+            self.assertTrue(run.call_args.kwargs['check'])
 
-    @patch("thinkisp.core.wifi.apply_zero_latency_optimizations")
-    @patch("thinkisp.core.wifi.is_hotspot_active", return_value=True)
-    @patch("thinkisp.core.wifi.run_cmd")
-    def test_set_band(self, mock_run_cmd, mock_active, mock_opt):
-        # 5 GHz
-        success, msg = set_band("5g")
-        self.assertTrue(success)
-        mock_run_cmd.assert_any_call([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "802-11-wireless.band", "a",
-            "802-11-wireless.channel", "149"
-        ])
-
-        # 2.4 GHz
-        success, msg = set_band("2.4g")
-        self.assertTrue(success)
-        mock_run_cmd.assert_any_call([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "802-11-wireless.band", "bg",
-            "802-11-wireless.channel", "6"
-        ])
-
-        # Auto
-        success, msg = set_band("auto")
-        self.assertTrue(success)
-        mock_run_cmd.assert_any_call([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "802-11-wireless.band", "",
-            "802-11-wireless.channel", "0"
-        ])
-
-        # Invalid band
-        success, msg = set_band("bad_band")
-        self.assertFalse(success)
-        self.assertIn("no válida", msg)
+    def test_qr_payload_escapes_credentials_and_records_hidden_network(self):
+        from thinkisp.core.wifi import wifi_qr_payload
+        payload = wifi_qr_payload('Red;local', 'p:a,s;word', True)
+        self.assertIn(r'S:Red\;local;', payload)
+        self.assertIn(r'P:p\:a\,s\;word;', payload)
+        self.assertIn('H:true;', payload)
 
     def test_format_signal_bar(self):
-        self.assertIn("Excelente", format_signal_bar(-45))
-        self.assertIn("Muy Buena", format_signal_bar(-60))
-        self.assertIn("Aceptable", format_signal_bar(-70))
-        self.assertIn("Débil", format_signal_bar(-85))
-        self.assertEqual(format_signal_bar(None), "N/D")
+        self.assertIn('Excelente', format_signal_bar(-45))
+        self.assertIn('Débil', format_signal_bar(-85))
+        self.assertEqual(format_signal_bar(None), 'N/D')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

@@ -15,8 +15,6 @@ from thinkisp.config import (
     BLUE,
     BOLD,
     CYAN,
-    DEFAULT_PSK,
-    DEFAULT_SSID,
     DIM,
     DNS_PROVIDERS,
     ETH_IFACE,
@@ -37,6 +35,7 @@ from thinkisp.core.dns import (
     set_dns_provider,
 )
 from thinkisp.core.network import (
+    ThinkISPError,
     format_bytes,
     format_duration,
     get_ethernet_status,
@@ -66,6 +65,7 @@ from thinkisp.core.watcher import (
     stop_daemon,
 )
 from thinkisp.core.wifi import (
+    wifi_qr_payload,
     format_signal_bar,
     get_arp_map,
     get_blocked_clients,
@@ -77,184 +77,100 @@ from thinkisp.core.wifi import (
     start_hotspot,
     stop_hotspot,
     unkick_client,
+    recover_network,
 )
+
+from thinkisp.core.profile import hotspot_details
+from thinkisp.ui.setup import ensure_setup, configure_hotspot
+
+
+def cmd_setup(args):
+    configure_hotspot()
+
+
+def cmd_doctor(args):
+    from thinkisp.core.doctor import collect_report
+    report = collect_report()
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print('thinkISP · Diagnóstico de compatibilidad (sólo lectura)')
+        labels = {'ok': 'OK', 'warning': 'AVISO', 'error': 'ERROR', 'unverified': 'SIN PROBAR'}
+        for check in report['checks']:
+            print(f"[{labels[check['status']]}] {check['id']}: {check['detail']}")
+        print('No se activó el hotspot ni se modificaron DNS, perfiles o reglas de red.')
+    if not report['core_checks_passed']:
+        raise ThinkISPError('Hay requisitos pendientes o sin confirmar. Consulta el diagnóstico anterior.')
+
+
+def cmd_recover(args):
+    print(_checked(recover_network()))
+
+
+def _checked(result):
+    success, message = result
+    if not success:
+        raise ThinkISPError(str(message))
+    return message
 
 
 def cmd_on(args):
-    """Activa el punto de acceso Wi-Fi."""
-    if is_hotspot_active():
-        print(f"\n{YELLOW}⚡ El punto de acceso '{DEFAULT_SSID}' ya está activo.{RESET}")
-        cmd_status(args)
-        return
-
-    print(f"\n{BOLD}{CYAN}═══════════════════════════════════════════════════════════{RESET}")
-    print(f"{BOLD}{GREEN}  🚀 INICIANDO ZONA WI-FI DE ALTO RENDIMIENTO (THINKISP){RESET}")
-    print(f"{BOLD}{CYAN}═══════════════════════════════════════════════════════════{RESET}")
-
-    eth = get_ethernet_status()
-    if eth["connected"]:
-        print(f"  {GREEN}✔ Cable Ethernet detectado:{RESET} {BOLD}{ETH_IFACE}{RESET} ({CYAN}{eth['speed']}{RESET})")
-        print(f"  {DIM}  Enrutando internet gigabit directo a la antena Wi-Fi...{RESET}")
-    else:
-        print(f"  {YELLOW}⚠ Advertencia:{RESET} Cable Ethernet ({ETH_IFACE}) no conectado.")
-        print(f"  {DIM}  Conecta el cable de red de la escuela para suministrar internet.{RESET}")
-
-    print(f"\n  {CYAN}Iniciando transmisión en 5 GHz (Canal 149 / 80 MHz)...{RESET}")
-    success, msg = start_hotspot()
-    if not success:
-        print(f"  {RED}✖ {msg}{RESET}")
-        return
-
+    """Configura la primera ejecución y activa el AP del equipo detectado."""
+    ensure_setup()
+    print(f"\n{BOLD}{CYAN}INICIANDO ZONA WI-FI · thinkISP{RESET}")
+    _checked(start_hotspot())
     start_daemon()
-    ip_addr = get_hotspot_ip()
-    fwd_active = get_ip_forward_status()
-    is_hidden = get_stealth_mode()
-    state = load_state()
-
-    print(f"  {GREEN}✔ Zona Wi-Fi activada con éxito.{RESET}\n")
-    print(f"  {BOLD}SSID:{RESET}         {GREEN}{DEFAULT_SSID}{RESET}")
-    print(f"  {BOLD}Contraseña:{RESET}   {YELLOW}{DEFAULT_PSK}{RESET}")
-    print(f"  {BOLD}Frecuencia:{RESET}   {CYAN}5 GHz (Canal 149 - 80 MHz VHT80){RESET}")
-    print(f"  {BOLD}Visibilidad:{RESET}  {MAGENTA}Modo Stealth (Oculto){RESET}" if is_hidden else f"{GREEN}Visible públicamente{RESET}")
-    print(f"  {BOLD}IP Gateway:{RESET}   {ip_addr}")
-    fwd_str = f"{GREEN}ACTIVO (1){RESET}" if fwd_active else f"{YELLOW}Gestionado dinámicamente por NetworkManager{RESET}"
-    print(f"  {BOLD}IP Forward:{RESET}   {fwd_str}")
-    print(f"  {BOLD}Firewall:{RESET}     {GREEN}Zona 'trusted' (Forwarding y NAT abiertos){RESET}")
-    if state.get("gaming_mode"):
-        print(f"  {BOLD}Gaming Mode:{RESET}  {GREEN}ACTIVO (Colas CAKE Anti-Bufferbloat){RESET}")
-    if state.get("adblock"):
-        print(f"  {BOLD}AdBlock:{RESET}      {GREEN}ACTIVO (AdGuard DNS){RESET}")
-    print(f"{BOLD}{CYAN}───────────────────────────────────────────────────────────{RESET}")
-    print(f"  {DIM}Tip: Usa {BOLD}thinkisp{RESET}{DIM} sin argumentos para abrir el Dashboard Interactivo (TUI).{RESET}")
-    print(f"  {DIM}     Usa {BOLD}thinkisp qr{RESET}{DIM} para conectar tu celular con la cámara.{RESET}")
-    print(f"  {DIM}     Usa {BOLD}thinkisp gaming{RESET}{DIM} para activar prioridad anti-lag para juegos.{RESET}")
-    print(f"{BOLD}{CYAN}═══════════════════════════════════════════════════════════{RESET}\n")
+    data = hotspot_details()
+    print(f"{GREEN}Zona Wi-Fi activada con éxito.{RESET}")
+    print(f"SSID: {data['ssid']}")
+    print(f"Interfaz: {data['interface']} · Radio: {data['radio']}")
+    print(f"Seguridad: {data['security']} · Oculto: {'sí' if data['hidden'] else 'no'}")
+    print(f"Gateway: {get_hotspot_ip()}")
+    print("Usa 'thinkisp qr' para consultar las credenciales y el código de conexión.")
 
 
 def cmd_off(args):
-    """Desactiva el punto de acceso Wi-Fi y restaura la conexión previa."""
-    if not is_hotspot_active():
-        print(f"\n{YELLOW}ℹ La zona Wi-Fi no está activa.{RESET}\n")
-        return
-
-    print(f"\n{BOLD}{YELLOW}Apagando zona Wi-Fi '{DEFAULT_SSID}'...{RESET}")
+    """Confirma el apagado antes de anunciarlo y de cerrar el vigilante."""
+    summary = _checked(stop_hotspot())
     stop_daemon()
-    cancel_timer()
-    success, summary = stop_hotspot()
-
-    print(f"{BOLD}{GREEN}✔ Zona Wi-Fi apagada con éxito.{RESET}")
-    if summary:
-        print(f"\n{BOLD}{CYAN}┌─── [ RESUMEN DE LA SESIÓN ] ─────────────────────────────{RESET}")
-        print(f"│  Duración:       {BOLD}{format_duration(summary['duration'])}{RESET}")
-        print(f"│  Descargado:     {GREEN}⬇ {format_bytes(summary['downloaded'])}{RESET}")
-        print(f"│  Subido:         {BLUE}⬆ {format_bytes(summary['uploaded'])}{RESET}")
-        total = summary['downloaded'] + summary['uploaded']
-        print(f"│  Total Tráfico:  {BOLD}{CYAN}⇆ {format_bytes(total)}{RESET}")
-        print(f"{BOLD}{CYAN}└──────────────────────────────────────────────────────────{RESET}\n")
+    print(f"{GREEN}Zona Wi-Fi apagada.{RESET}")
+    if isinstance(summary, dict):
+        print(f"Duración: {format_duration(summary['duration'])}")
+        print(f"Descargado: {format_bytes(summary['downloaded'])}")
+        print(f"Subido: {format_bytes(summary['uploaded'])}")
 
 
 def cmd_boost(args):
-    """Activa el modo turbo de máxima velocidad y latencia cero."""
-    print(f"\n{BOLD}{MAGENTA}═══════════════════════════════════════════════════════════{RESET}")
-    print(f"{BOLD}{MAGENTA}  ⚡ THINKISP BOOST: MÁXIMA VELOCIDAD & CERO LATENCIA     {RESET}")
-    print(f"{BOLD}{MAGENTA}═══════════════════════════════════════════════════════════{RESET}")
-
-    if not is_hotspot_active():
-        print(f"  {CYAN}Activando zona Wi-Fi en modo Turbo...{RESET}")
+    if not is_hotspot_active(check=True):
         cmd_on(args)
-
-    apply_boost_mode()
-    eth = get_ethernet_status()
-
-    print(f"  {GREEN}✔ Wi-Fi Power Save desactivado permanentemente (0 jitter).{RESET}")
-    print(f"  {GREEN}✔ Algoritmo CAKE activado en colas (Cero bufferbloat).{RESET}")
-    print(f"  {GREEN}✔ Cola de transmisión ampliada a 2000 paquetes.{RESET}")
-    print(f"  {GREEN}✔ Perfil ThinkPad activado en: {BOLD}Divino Nuclear (Performance){RESET}")
-
-    print(f"\n  {BOLD}Estado de Rendimiento:{RESET}")
-    print(f"  • Banda Wi-Fi:       {CYAN}5 GHz AC (Canal 149 - 80 MHz, hasta 867 Mbps PHY){RESET}")
-    print(f"  • Enlace Cableado:   {GREEN}{eth['speed']}{RESET} ({'Conectado' if eth['connected'] else 'Desconectado'})")
-    print(f"  • Latencia local:    {GREEN}< 2 ms garantizados (Ping plano){RESET}")
-    print(f"{BOLD}{MAGENTA}═══════════════════════════════════════════════════════════{RESET}\n")
+    print(_checked(apply_boost_mode()))
+    data = hotspot_details()
+    print(f"Interfaz: {data['interface']} · Radio: {data['radio']}")
 
 
 def cmd_status(args):
-    """Muestra el estado completo y los clientes conectados."""
-    active = is_hotspot_active()
+    """Muestra datos consultados al sistema, sin suponer banda ni firewall."""
+    active = is_hotspot_active(check=True)
+    data = hotspot_details()
     eth = get_ethernet_status()
-    fwd_active = get_ip_forward_status()
-    state = load_state()
-    is_hidden = get_stealth_mode()
-    qdiscs = run_cmd(["nmcli", "-g", "tc.qdiscs", "connection", "show", HOTSPOT_CONN])
-    
-    print(f"\n{BOLD}{CYAN}┌─── [ ESTADO THINKISP HOTSPOT ] ──────────────────────────{RESET}")
-    if active:
-        ip_addr = get_hotspot_ip()
-        print(f"│  Estado:         {GREEN}● ACTIVO (Transmitiendo){RESET}")
-        print(f"│  SSID:           {BOLD}{DEFAULT_SSID}{RESET}")
-        print(f"│  Contraseña:     {YELLOW}{DEFAULT_PSK}{RESET}")
-        print(f"│  Frecuencia:     {CYAN}5 GHz (Canal 149 - 80 MHz VHT80){RESET}")
-        print(f"│  Visibilidad:    {MAGENTA}Modo Stealth (Oculto){RESET}" if is_hidden else f"│  Visibilidad:    {GREEN}Visible públicamente{RESET}")
-        print(f"│  IP Gateway:     {ip_addr}")
-        fwd_str = f"{GREEN}Activo (1){RESET}" if fwd_active else f"{YELLOW}0 (se activa con tráfico NM){RESET}"
-        print(f"│  IP Forwarding:  {fwd_str}")
-        print(f"│  Firewall Zone:  {GREEN}trusted (ACCEPT / forward: yes){RESET}")
-        
-        if qdiscs:
-            if "cake" in qdiscs or "fq_codel" in qdiscs:
-                print(f"│  QoS / Gaming:   {GREEN}🎮 ACTIVO ({qdiscs}){RESET}")
-            elif "tbf" in qdiscs:
-                print(f"│  Límite Ancho B: {YELLOW}⚠ {state.get('rate_limit', qdiscs)}{RESET}")
-            else:
-                print(f"│  QoS Qdisc:      {qdiscs}")
-        else:
-            print(f"│  QoS / Gaming:   {DIM}Estándar{RESET}")
-
-        adblock_str = f"{GREEN}ACTIVO (AdGuard DNS){RESET}" if state.get("adblock") else f"{DIM}Desactivado{RESET}"
-        print(f"│  AdBlock:        {adblock_str}")
-        dns_curr = state.get("dns", "Auto / DHCP")
-        print(f"│  DNS Upstream:   {CYAN}{dns_curr}{RESET}")
-
-        session = state.get("session")
-        if session:
-            dur = time.time() - session["start_time"]
-            rx, tx = get_iface_bytes(WLAN_IFACE)
-            down = max(0, tx - session["start_tx"])
-            up = max(0, rx - session["start_rx"])
-            print(f"│  Sesión Actual:  {format_duration(dur)} (⬇ {format_bytes(down)} | ⬆ {format_bytes(up)})")
-
-        tinfo = get_timer_status()
-        if tinfo and "remaining_str" in tinfo:
-            print(f"│  Temporizador:   {YELLOW}⏳ Se apaga en {tinfo['remaining_str']}{RESET}")
-    else:
-        print(f"│  Estado:         {RED}○ INACTIVO (Apagado){RESET}")
-        print(f"│  SSID:           {DEFAULT_SSID}")
-        fwd_str = f"{GREEN}Activo (1){RESET}" if fwd_active else f"{DIM}Inactivo (0){RESET}"
-        print(f"│  IP Forwarding:  {fwd_str}")
-
-    eth_color = GREEN if eth["connected"] else YELLOW
-    eth_text = f"{eth_color}{'Conectado (' + eth['speed'] + ')' if eth['connected'] else 'No conectado'}{RESET}"
-    print(f"│  Ethernet Esc.:  {eth_text}")
-    print(f"{BOLD}{CYAN}└──────────────────────────────────────────────────────────{RESET}")
-
-    if active:
-        clients = get_connected_clients()
-        print(f"\n{BOLD}Dispositivos Conectados ({len(clients)}):{RESET}")
-        if not clients:
-            print(f"  {DIM}Esperando dispositivos... Escanea el código QR ({BOLD}thinkisp qr{RESET}{DIM}) para conectar.{RESET}\n")
-        else:
-            print(f"  {'IP':<16} {'MAC':<19} {'SEÑAL':<30} {'VELOCIDAD':<12}")
-            print(f"  {'-'*15} {'-'*18} {'-'*28} {'-'*11}")
-            for c in clients:
-                tx_spd = f"{c['tx_mbps']} Mbps" if c['tx_mbps'] else "N/D"
-                sig_bar = format_signal_bar(c['signal'])
-                print(f"  {c['ip']:<16} {c['mac']:<19} {sig_bar:<39} {CYAN}{tx_spd:<12}{RESET}")
-            print("")
+    print(f"\n{BOLD}thinkISP · ESTADO{RESET}")
+    print(f"Estado: {'ACTIVO' if active else 'INACTIVO'}")
+    print(f"SSID: {data['ssid']} · Interfaz: {data['interface']}")
+    print(f"Radio: {data['radio']} · Potencia: {data.get('tx_power', 'Sin datos')}")
+    print(f"Seguridad: {data['security']} · SSID oculto: {'sí' if data['hidden'] else 'no'}")
+    print(f"Gateway: {get_hotspot_ip() if active else 'Sin datos'}")
+    print(f"Zona de firewall del perfil: {data['firewall']}")
+    print(f"IPv4 forwarding: {'Activo' if get_ip_forward_status() else 'Inactivo'}")
+    print(f"Salida: {eth['interface'] or 'No detectada'} · {'Conectada' if eth['connected'] else 'Desconectada'} · {eth['speed']}")
+    if active and WLAN_IFACE:
+        qdiscs = run_cmd(['tc', 'qdisc', 'show', 'dev', WLAN_IFACE])
+        print(f"Colas aplicadas: {qdiscs or 'Sin datos'}")
+        cmd_clients(args)
 
 
 def cmd_clients(args):
     """Lista dispositivos conectados con su señal y velocidad."""
-    clients = get_connected_clients()
+    clients = get_connected_clients(check=True)
     print(f"\n{BOLD}Dispositivos Conectados ({len(clients)}):{RESET}")
     if not clients:
         print(f"  {DIM}Esperando dispositivos... Escanea el código QR ({BOLD}thinkisp qr{RESET}{DIM}) para conectar.{RESET}\n")
@@ -275,7 +191,7 @@ def cmd_speed(args):
     print(f"{BOLD}{CYAN}═══════════════════════════════════════════════════════════{RESET}")
     eth = get_ethernet_status()
     if eth["connected"]:
-        print(f"  {GREEN}✔ Enlace de origen:{RESET} {BOLD}{ETH_IFACE}{RESET} ({CYAN}{eth['speed']}{RESET})")
+        print(f"  {GREEN}✔ Enlace de origen:{RESET} {BOLD}{eth.get('interface') or 'Sin datos'}{RESET} ({CYAN}{eth['speed']}{RESET})")
     else:
         print(f"  {YELLOW}ℹ Enlace actual:{RESET} Wi-Fi cliente / Móvil (Ethernet no conectado)")
     
@@ -288,6 +204,8 @@ def cmd_speed(args):
         print(f"  {GREEN}✔ Velocidad Descarga:{RESET}  {BOLD}{CYAN}{metrics['down_mbps']:.1f} Mbps{RESET} ({metrics['down_mbs']:.1f} MB/s)")
     if metrics["up_mbps"] is not None:
         print(f"  {GREEN}✔ Velocidad Subida:{RESET}    {BOLD}{MAGENTA}{metrics['up_mbps']:.1f} Mbps{RESET} ({metrics['up_mbs']:.1f} MB/s)")
+    if metrics["error"]:
+        raise ThinkISPError(metrics["error"])
     print(f"{BOLD}{CYAN}═══════════════════════════════════════════════════════════{RESET}\n")
 
 
@@ -317,7 +235,7 @@ def cmd_top(args):
             output = []
             output.append("\033[H\033[2J")
             output.append(f"{BOLD}{CYAN}┌─── [ THINKISP TOP: TRÁFICO EN TIEMPO REAL ] ─────────────{RESET}")
-            output.append(f"│  Red: {BOLD}{DEFAULT_SSID}{RESET} (5 GHz Ch 149) | Clientes: {BOLD}{len(curr_stations)}{RESET}")
+            output.append(f"│  Red: {BOLD}{hotspot_details()['ssid']}{RESET} | Interfaz: {WLAN_IFACE} | Clientes: {len(curr_stations)}")
             output.append(f"│  Tráfico Total: {GREEN}⬇ {format_bytes(tot_down_rate)}/s{RESET} | {BLUE}⬆ {format_bytes(tot_up_rate)}/s{RESET}")
             output.append(f"│  {DIM}Presiona Ctrl+C para salir.{RESET}")
             output.append(f"{BOLD}{CYAN}└──────────────────────────────────────────────────────────{RESET}\n")
@@ -330,8 +248,8 @@ def cmd_top(args):
 
                 for mac, st in curr_stations.items():
                     prev = prev_stations.get(mac, {"rx_bytes": 0, "tx_bytes": 0})
-                    down_str = f"{GREEN}Activo{RESET}"
-                    up_str = f"{BLUE}Activo{RESET}"
+                    down_str = "No medido"
+                    up_str = "No medido"
                     sig_str = format_signal_bar(st["signal"])
                     output.append(f"  {st['ip']:<15} {mac:<18} {down_str:<25} {up_str:<23} {sig_str}")
 
@@ -395,6 +313,7 @@ def cmd_widget(args):
         active = is_hotspot_active()
         eth = get_ethernet_status()
         state = load_state()
+        info = hotspot_details()
         
         if active:
             clients = get_connected_clients()
@@ -411,10 +330,10 @@ def cmd_widget(args):
                 down_str = f"\nDescargado: {format_bytes(down)}"
                 
             data = {
-                "text": f"󰖩 {DEFAULT_SSID} ({client_count})",
+                "text": f"󰖩 {info['ssid']} ({client_count})",
                 "alt": "active",
                 "tooltip": (
-                    f"Zona Wi-Fi: {DEFAULT_SSID} (5 GHz Ch 149)\n"
+                    f"Zona Wi-Fi: {info['ssid']} ({info['radio']})\n"
                     f"Estado: Activo{dur_str}\n"
                     f"Clientes: {client_count}\n"
                     f"Gateway: {ip_addr}{down_str}\n"
@@ -426,9 +345,9 @@ def cmd_widget(args):
             }
         else:
             data = {
-                "text": f"󰖪 {DEFAULT_SSID}",
+                "text": f"󰖪 {info['ssid']}",
                 "alt": "inactive",
-                "tooltip": f"Zona Wi-Fi '{DEFAULT_SSID}' apagada\nClic para activar con 'thinkisp on'",
+                "tooltip": f"Zona Wi-Fi '{info['ssid']}' apagada\nClic para activar con 'thinkisp on'",
                 "class": "inactive",
                 "percentage": 0,
                 "clients": 0
@@ -447,16 +366,15 @@ def cmd_widget(args):
 
 
 def cmd_qr(args):
-    """Genera e imprime el código QR en la terminal para conectar móviles."""
-    wifi_str = f"WIFI:S:{DEFAULT_SSID};T:WPA;P:{DEFAULT_PSK};;"
-    print(f"\n{BOLD}{CYAN}Escanea con la cámara de tu celular para conectarte a '{DEFAULT_SSID}':{RESET}\n")
-    if shutil.which("qrencode"):
-        subprocess.run(["qrencode", "-t", "UTF8", wifi_str])
+    data = hotspot_details(secrets=True)
+    payload = wifi_qr_payload(data['ssid'], data['psk'], data['hidden'], data['security'])
+    print(f"SSID: {data['ssid']}")
+    print(f"Contraseña: {data['psk']}")
+    print(f"Seguridad: {data['security']}")
+    if shutil.which('qrencode'):
+        print(run_cmd(['qrencode', '-t', 'UTF8', payload], check=True))
     else:
-        print(f"{YELLOW}Instala qrencode para ver el código QR (sudo pacman -S qrencode){RESET}")
-    print(f"\n  {BOLD}SSID:{RESET}       {GREEN}{DEFAULT_SSID}{RESET}")
-    print(f"  {BOLD}Clave:{RESET}      {YELLOW}{DEFAULT_PSK}{RESET}")
-    print(f"  {BOLD}Seguridad:{RESET}  WPA2-PSK\n")
+        print('Instala qrencode para generar el código QR en esta terminal.')
 
 
 def cmd_gaming(args):
@@ -470,7 +388,7 @@ def cmd_gaming(args):
         return
 
     activate = True if mode == "on" else (False if mode == "off" else not is_gaming)
-    success, msg = set_gaming_mode(activate)
+    msg = _checked(set_gaming_mode(activate))
     print(f"\n{GREEN if activate else YELLOW}{msg}{RESET}\n")
 
 
@@ -483,17 +401,14 @@ def cmd_limit(args):
         return
 
     if speed_arg in ("reset", "off", "clear", "none", "0"):
-        clear_rate_limit()
-        print(f"\n{GREEN}✔ Límite de velocidad eliminado.{RESET}\n")
+        print(_checked(clear_rate_limit()))
         return
 
     mbps = parse_speed_mbps(speed_arg)
     if not mbps or mbps <= 0:
-        print(f"\n{RED}✖ Velocidad no válida: '{speed_arg}'.{RESET}\n")
-        return
+        raise ThinkISPError(f"Velocidad no válida: {speed_arg!r}.")
 
-    set_rate_limit(mbps)
-    print(f"\n{GREEN}✔ Límite de ancho de banda fijado en: {mbps} Mbps.{RESET}\n")
+    print(_checked(set_rate_limit(mbps)))
 
 
 def cmd_adblock(args):
@@ -502,11 +417,11 @@ def cmd_adblock(args):
     is_adblock = get_adblock_status()
 
     if mode == "status":
-        print(f"\n{BOLD}AdBlock en Hotspot:{RESET} " + (f"{GREEN}ACTIVADO (AdGuard DNS){RESET}" if is_adblock else f"{YELLOW}DESACTIVADO{RESET}\n"))
+        print(f"\n{BOLD}AdGuard DNS en la salida:{RESET} " + (f"{GREEN}APLICADO (AdGuard DNS){RESET}" if is_adblock else f"{YELLOW}DESACTIVADO{RESET}\n"))
         return
 
     activate = True if mode == "on" else (False if mode == "off" else not is_adblock)
-    success, msg = set_adblock(activate)
+    msg = _checked(set_adblock(activate))
     print(f"\n{GREEN if activate else YELLOW}{msg}{RESET}\n")
 
 
@@ -540,32 +455,27 @@ def cmd_dns(args):
         print(f"\n{BOLD}DNS Upstream Configurado:{RESET} {CYAN}{curr_dns}{RESET}\n")
         return
 
-    success, msg = set_dns_provider(target)
-    print(f"\n{GREEN if success else RED}{msg}{RESET}\n")
+    print(_checked(set_dns_provider(target)))
 
 
 def cmd_kick(args):
     """Expulsa y bloquea permanentemente a un dispositivo intruso."""
-    success, msg = kick_client(args.target)
-    print(f"\n{GREEN if success else RED}{msg}{RESET}\n")
+    print(_checked(kick_client(args.target)))
 
 
 def cmd_unkick(args):
     """Desbloquea una dirección MAC."""
-    success, msg = unkick_client(args.target)
-    print(f"\n{GREEN if success else RED}{msg}{RESET}\n")
+    print(_checked(unkick_client(args.target)))
 
 
 def cmd_blocked(args):
-    """Lista las direcciones MAC bloqueadas."""
     macs = get_blocked_clients()
-    print(f"\n{BOLD}{RED}┌─── [ DISPOSITIVOS BLOQUEADOS EN THINKISP ] ──────────────{RESET}")
+    print('Lista configurada de acceso bloqueado al router e Internet:')
+    for mac in macs:
+        print(f'  {mac}')
     if not macs:
-        print(f"│  {GREEN}No hay dispositivos bloqueados en la lista negra.{RESET}")
-    else:
-        for m in macs:
-            print(f"│  🚫 {BOLD}{m}{RESET}")
-    print(f"{BOLD}{RED}└──────────────────────────────────────────────────────────{RESET}\n")
+        print('  Sin bloqueos configurados.')
+    print('La asociación Wi-Fi y el aislamiento entre clientes son controles distintos.')
 
 
 def cmd_stealth(args):
@@ -612,8 +522,7 @@ def cmd_timer(args):
 
     sec = parse_duration_str(action)
     if sec <= 0:
-        print(f"\n{RED}✖ Formato no válido: '{action}'. Usa '45m', '1h', etc.{RESET}\n")
-        return
+        raise ThinkISPError(f"Duración no válida: {action!r}.")
 
     success, msg = set_timer_countdown(sec)
     print(f"\n{GREEN}{msg}{RESET}\n")
@@ -629,5 +538,4 @@ def cmd_toggle(args):
 
 def cmd_band(args):
     """Cambia entre 5GHz y 2.4GHz."""
-    success, msg = set_band(args.band)
-    print(f"\n{GREEN if success else RED}{msg}{RESET}\n")
+    print(_checked(set_band(args.band)))

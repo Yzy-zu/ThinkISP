@@ -3,14 +3,14 @@
 # ThinkISP - Autocompletado nativo para Zsh
 # ==============================================================================
 # Para activar en tu sesión:
-#   fpath=(/home/jssi/thinkisp/extras/completions $fpath)
+#   fpath=(./extras/completions $fpath)
 #   autoload -Uz compinit && compinit
 #
 # Para instalación permanente en el sistema:
-#   sudo cp /home/jssi/thinkisp/extras/completions/_thinkisp /usr/share/zsh/site-functions/_thinkisp
+#   sudo cp ./extras/completions/_thinkisp /usr/share/zsh/site-functions/_thinkisp
 # O para el usuario actual:
 #   mkdir -p ~/.zsh/completion
-#   cp /home/jssi/thinkisp/extras/completions/_thinkisp ~/.zsh/completion/_thinkisp
+#   cp ./extras/completions/_thinkisp ~/.zsh/completion/_thinkisp
 #   (asegúrate de incluir fpath=(~/.zsh/completion $fpath) antes de compinit en ~/.zshrc)
 # ==============================================================================
 
@@ -40,16 +40,20 @@ _thinkisp() {
 
     local -a subcommands
     subcommands=(
-        'on:Activa la zona Wi-Fi (sputnik)'
+        'doctor:Diagnóstico de compatibilidad sin modificar la red'
+        'setup:Panel de configuración según las capacidades del equipo'
+        'config:Abre el panel de configuración'
+        'on:Configura si es necesario y activa el punto de acceso'
         'off:Desactiva la zona Wi-Fi y restaura conexión previa'
-        'boost:Modo máxima velocidad, 0 latencia y CPU Performance'
+        'recover:Reintenta restaurar la red con el hotspot apagado'
+        'boost:Configura CAKE y ahorro de energía Wi-Fi'
         'status:Muestra el estado y dispositivos conectados'
         'clients:Lista dispositivos conectados con su señal y velocidad'
         'speed:Test de velocidad real (Ping, Descarga y Subida)'
         'top:Monitor interactivo de tráfico en vivo por dispositivo'
         'stats:Contador de datos transferidos en la sesión'
         'widget:Salida JSON para Waybar / QuickShell'
-        'kick:Expulsa y bloquea permanentemente a un intruso por IP o MAC'
+        'kick:Bloqueo de clientes (nftables)'
         'unkick:Desbloquea una dirección MAC bloqueada'
         'blocked:Lista las direcciones MAC bloqueadas'
         'stealth:Modo invisible (ocultar/mostrar SSID)'
@@ -75,6 +79,9 @@ _thinkisp() {
             ;;
         args)
             case "$words[1]" in
+                doctor)
+                    _arguments '--json[Informe JSON]'
+                    ;;
                 widget)
                     _arguments \
                         '(-h --help)'{-h,--help}'[Muestra ayuda]' \
@@ -116,8 +123,9 @@ _thinkisp() {
                         'cloudflare:Cloudflare DNS 1.1.1.1 (Ultra-baja latencia)'
                         'google:Google Public DNS 8.8.8.8 (Ultra estable)'
                         'quad9:Quad9 DNS Seguro 9.9.9.9 (Privacidad y seguridad)'
-                        'default:Restaurar a DNS automático / DHCP'
-                        'auto:Seleccionar automáticamente el DNS más rápido'
+                        'restore:Restaurar configuración DNS anterior'
+                        'default:Restaurar configuración DNS anterior'
+                        'auto:Restaurar configuración DNS anterior'
                         'benchmark:Medir latencia de todos los servidores DNS'
                     )
                     _describe -t providers 'servidor DNS' dns_providers
@@ -127,8 +135,8 @@ _thinkisp() {
                     bands=(
                         '2.4:2.4 GHz Ch 6 (Compatibilidad y mayor alcance)'
                         '2.4g:2.4 GHz Ch 6'
-                        '5:5 GHz VHT80 Ch 149 (Rendimiento máximo ~867Mbps)'
-                        '5g:5 GHz VHT80 Ch 149'
+                        '5:5 GHz si está disponible en este equipo'
+                        '5g:5 GHz si está disponible'
                         'auto:Selección automática de banda'
                     )
                     _describe -t bands 'banda Wi-Fi' bands

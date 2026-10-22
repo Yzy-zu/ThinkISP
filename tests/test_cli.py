@@ -1,325 +1,139 @@
-"""
-Unit tests for thinkisp.ui.cli module and CLI command routing.
-"""
-
+"""CLI: datos reales, propagación de fallos y configuración inicial."""
 import argparse
+from contextlib import ExitStack
 import io
 import json
-from pathlib import Path
 import sys
 import unittest
-from unittest.mock import MagicMock, call, patch
-
-# Ensure thinkisp package is importable regardless of CWD
-THINKISP_ROOT = Path(__file__).resolve().parent.parent
-if str(THINKISP_ROOT) not in sys.path:
-    sys.path.insert(0, str(THINKISP_ROOT))
+from unittest.mock import patch
 
 from main import build_parser, main
-from thinkisp.config import DEFAULT_PSK, DEFAULT_SSID, ETH_IFACE, HOTSPOT_CONN
-from thinkisp.ui.cli import (
-    cmd_adblock,
-    cmd_band,
-    cmd_blocked,
-    cmd_boost,
-    cmd_clients,
-    cmd_dns,
-    cmd_gaming,
-    cmd_kick,
-    cmd_limit,
-    cmd_off,
-    cmd_on,
-    cmd_qr,
-    cmd_speed,
-    cmd_stats,
-    cmd_status,
-    cmd_stealth,
-    cmd_timer,
-    cmd_toggle,
-    cmd_unkick,
-    cmd_widget,
-)
+from thinkisp.core.network import CommandError, ThinkISPError
+from thinkisp.ui import cli
+
+
+DETAILS = {"ssid": "Red del equipo de prueba", "psk": "ClavePruebaVariable!",
+           "interface": "wifi-test", "radio": "2437 MHz · canal 6 · 20 MHz",
+           "hidden": True, "security": "wpa-psk", "firewall": "zona-personalizada", "tx_power": "17 dBm"}
 
 
 class TestCliCommands(unittest.TestCase):
-    """Tests for CLI handler functions in thinkisp.ui.cli."""
+    def setUp(self):
+        self.stack = ExitStack()
+        self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.object(cli, 'hotspot_details', return_value=dict(DETAILS)))
+        self.stack.enter_context(patch.object(cli, 'ensure_setup'))
+        self.output = self.stack.enter_context(patch('sys.stdout', new_callable=io.StringIO))
+        self.stack.enter_context(patch.object(cli, 'WLAN_IFACE', 'wifi-test'))
 
-    @patch("thinkisp.ui.cli.start_daemon")
-    @patch("thinkisp.ui.cli.start_hotspot", return_value=(True, "OK"))
-    @patch("thinkisp.ui.cli.get_ethernet_status", return_value={"interface": ETH_IFACE, "connected": True, "speed": "1000Mb/s"})
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=False)
-    @patch("thinkisp.ui.cli.get_hotspot_ip", return_value="10.42.0.1/24")
-    @patch("thinkisp.ui.cli.get_ip_forward_status", return_value=True)
-    @patch("thinkisp.ui.cli.get_stealth_mode", return_value=False)
-    @patch("thinkisp.ui.cli.load_state", return_value={})
-    def test_cmd_on(self, mock_load, mock_stealth, mock_fwd, mock_ip, mock_active, mock_eth, mock_start, mock_daemon):
-        args = argparse.Namespace(command="on")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_on(args)
-            output = mock_out.getvalue()
+    def test_on_configures_before_starting_and_uses_profile_data(self):
+        events = []
+        with patch.object(cli, 'ensure_setup', side_effect=lambda: events.append('setup')), \
+             patch.object(cli, 'start_hotspot', side_effect=lambda: (events.append('start') or (True, 'OK'))), \
+             patch.object(cli, 'start_daemon') as daemon, \
+             patch.object(cli, 'get_hotspot_ip', return_value='192.168.73.1/24'):
+            cli.cmd_on(argparse.Namespace())
+        self.assertEqual(events, ['setup', 'start'])
+        self.assertIn(DETAILS['ssid'], self.output.getvalue())
+        self.assertIn(DETAILS['radio'], self.output.getvalue())
+        self.assertIn('192.168.73.1/24', self.output.getvalue())
+        self.assertNotIn('80 MHz', self.output.getvalue())
+        daemon.assert_called_once()
 
-        self.assertIn("INICIANDO ZONA WI-FI", output)
-        self.assertIn(DEFAULT_SSID, output)
-        self.assertIn("10.42.0.1/24", output)
-        mock_start.assert_called_once()
-        mock_daemon.assert_called_once()
+    def test_on_failure_never_prints_success_or_starts_watcher(self):
+        error = CommandError(['nmcli'], 'Permission denied', 4)
+        with patch.object(cli, 'start_hotspot', side_effect=error), patch.object(cli, 'start_daemon') as daemon:
+            with self.assertRaises(CommandError):
+                cli.cmd_on(argparse.Namespace())
+        self.assertNotIn('activada con éxito', self.output.getvalue())
+        daemon.assert_not_called()
 
-    @patch("thinkisp.ui.cli.cmd_status")
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_on_already_active(self, mock_active, mock_status):
-        args = argparse.Namespace(command="on")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_on(args)
-            output = mock_out.getvalue()
+    def test_off_does_not_cancel_timer_before_success(self):
+        with patch.object(cli, 'stop_hotspot', side_effect=CommandError(['nmcli'], 'denied')), \
+             patch.object(cli, 'cancel_timer') as timer, patch.object(cli, 'stop_daemon') as daemon:
+            with self.assertRaises(CommandError):
+                cli.cmd_off(argparse.Namespace())
+        timer.assert_not_called()
+        daemon.assert_not_called()
+        self.assertNotIn('apagada.', self.output.getvalue())
 
-        self.assertIn("ya está activo", output)
-        mock_status.assert_called_once_with(args)
+    def test_off_prints_recorded_summary(self):
+        summary = {'duration': 120, 'downloaded': 1048576, 'uploaded': 524288}
+        with patch.object(cli, 'stop_hotspot', return_value=(True, summary)), \
+             patch.object(cli, 'stop_daemon'), patch.object(cli, 'cancel_timer'):
+            cli.cmd_off(argparse.Namespace())
+        self.assertIn('2m 00s', self.output.getvalue())
+        self.assertIn('1.0 MB', self.output.getvalue())
 
-    @patch("thinkisp.ui.cli.stop_hotspot")
-    @patch("thinkisp.ui.cli.cancel_timer")
-    @patch("thinkisp.ui.cli.stop_daemon")
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_off_active(self, mock_active, mock_daemon, mock_timer, mock_stop):
-        summary = {"duration": 120, "downloaded": 1048576, "uploaded": 524288}
-        mock_stop.return_value = (True, summary)
+    def test_boost_does_not_continue_after_failed_start(self):
+        with patch.object(cli, 'is_hotspot_active', return_value=False), \
+             patch.object(cli, 'cmd_on', side_effect=ThinkISPError('failed')), \
+             patch.object(cli, 'apply_boost_mode') as boost:
+            with self.assertRaises(ThinkISPError):
+                cli.cmd_boost(argparse.Namespace())
+        boost.assert_not_called()
 
-        args = argparse.Namespace(command="off")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_off(args)
-            output = mock_out.getvalue()
+    def test_status_reports_actual_radio_and_firewall(self):
+        with patch.object(cli, 'is_hotspot_active', return_value=True), \
+             patch.object(cli, 'get_ethernet_status', return_value={'interface': 'usb-net', 'connected': True, 'speed': '100Mb/s'}), \
+             patch.object(cli, 'get_hotspot_ip', return_value='192.168.73.1/24'), \
+             patch.object(cli, 'get_ip_forward_status', return_value=False), \
+             patch.object(cli, 'run_cmd', return_value='qdisc fq_codel 0: root'), \
+             patch.object(cli, 'get_connected_clients', return_value=[]):
+            cli.cmd_status(argparse.Namespace())
+        output = self.output.getvalue()
+        for text in (DETAILS['ssid'], DETAILS['radio'], 'zona-personalizada', '100Mb/s', 'Inactivo'):
+            self.assertIn(text, output)
+        self.assertNotIn('trusted', output)
+        self.assertNotIn(DETAILS['psk'], output)
 
-        self.assertIn("apagada con éxito", output)
-        self.assertIn("RESUMEN DE LA SESIÓN", output)
-        self.assertIn("1.0 MB", output)
-        mock_daemon.assert_called_once()
-        mock_timer.assert_called_once()
-        mock_stop.assert_called_once()
+    def test_widget_is_json_with_actual_ssid_and_radio(self):
+        with patch.object(cli, 'is_hotspot_active', return_value=True), \
+             patch.object(cli, 'get_ethernet_status', return_value={'connected': False, 'speed': 'Sin datos'}), \
+             patch.object(cli, 'load_state', return_value={}), \
+             patch.object(cli, 'get_connected_clients', return_value=[{}]), \
+             patch.object(cli, 'get_hotspot_ip', return_value='192.168.73.1/24'):
+            cli.cmd_widget(argparse.Namespace(watch=False))
+        data = json.loads(self.output.getvalue())
+        self.assertIn(DETAILS['ssid'], data['text'])
+        self.assertIn(DETAILS['radio'], data['tooltip'])
+        self.assertEqual(data['clients'], 1)
 
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=False)
-    def test_cmd_off_inactive(self, mock_active):
-        args = argparse.Namespace(command="off")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_off(args)
-            output = mock_out.getvalue()
+    def test_qr_uses_current_credentials(self):
+        with patch.object(cli.shutil, 'which', return_value=None):
+            cli.cmd_qr(argparse.Namespace())
+        self.assertIn(DETAILS['ssid'], self.output.getvalue())
+        self.assertIn(DETAILS['psk'], self.output.getvalue())
 
-        self.assertIn("no está activa", output)
+    def test_failed_operation_result_is_not_success(self):
+        with patch.object(cli, 'set_dns_provider', return_value=(False, 'unknown provider')):
+            with self.assertRaisesRegex(ThinkISPError, 'unknown provider'):
+                cli.cmd_dns(argparse.Namespace(provider='missing'))
 
-    @patch("thinkisp.ui.cli.apply_boost_mode")
-    @patch("thinkisp.ui.cli.get_ethernet_status", return_value={"interface": ETH_IFACE, "connected": True, "speed": "1000Mb/s"})
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_boost(self, mock_active, mock_eth, mock_boost):
-        args = argparse.Namespace(command="boost")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_boost(args)
-            output = mock_out.getvalue()
+    def test_invalid_limit_is_rejected_without_mutation(self):
+        for value in ['-30', '30garbage', '1.2.3']:
+            with self.subTest(value=value), patch.object(cli, 'set_rate_limit') as apply:
+                with self.assertRaises(ThinkISPError):
+                    cli.cmd_limit(argparse.Namespace(speed_or_action=value))
+                apply.assert_not_called()
 
-        self.assertIn("THINKISP BOOST", output)
-        self.assertIn("CAKE", output)
-        mock_boost.assert_called_once()
+    def test_entrypoint_returns_nonzero_and_preserves_error(self):
+        with patch('sys.argv', ['thinkisp', 'on']), \
+             patch('main.cmd_on', side_effect=CommandError(['nmcli'], 'Not authorized', 4)), \
+             patch('sys.stderr', new_callable=io.StringIO) as errors:
+            self.assertEqual(main(), 1)
+        self.assertIn('Not authorized', errors.getvalue())
+        self.assertNotIn('Traceback', errors.getvalue())
 
-    @patch("thinkisp.ui.cli.get_connected_clients")
-    @patch("thinkisp.ui.cli.run_cmd", return_value="root cake")
-    @patch("thinkisp.ui.cli.get_stealth_mode", return_value=False)
-    @patch("thinkisp.ui.cli.load_state", return_value={"gaming_mode": True, "dns": "Cloudflare DNS"})
-    @patch("thinkisp.ui.cli.get_ip_forward_status", return_value=True)
-    @patch("thinkisp.ui.cli.get_ethernet_status", return_value={"connected": True, "speed": "1000Mb/s"})
-    @patch("thinkisp.ui.cli.get_hotspot_ip", return_value="10.42.0.1/24")
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_status_active(self, mock_act, mock_ip, mock_eth, mock_fwd, mock_load, mock_st, mock_q, mock_clients):
-        mock_clients.return_value = [
-            {"ip": "10.42.0.50", "mac": "00:11:22:33:44:55", "signal": -45, "tx_mbps": 866.7}
-        ]
-        args = argparse.Namespace(command="status")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_status(args)
-            output = mock_out.getvalue()
+    def test_setup_and_config_are_routed(self):
+        for command in ['setup', 'config']:
+            with self.subTest(command=command), patch('sys.argv', ['thinkisp', command]), patch('main.cmd_setup') as setup:
+                self.assertEqual(main(), 0)
+                setup.assert_called_once()
 
-        self.assertIn("ACTIVO (Transmitiendo)", output)
-        self.assertIn("10.42.0.50", output)
-        self.assertIn("00:11:22:33:44:55", output)
-        self.assertIn("866.7 Mbps", output)
-
-    @patch("thinkisp.ui.cli.get_connected_clients")
-    def test_cmd_clients(self, mock_clients):
-        mock_clients.return_value = [
-            {"ip": "10.42.0.12", "mac": "aa:bb:cc:dd:ee:ff", "signal": -55, "tx_mbps": 433.3}
-        ]
-        args = argparse.Namespace(command="clients")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_clients(args)
-            output = mock_out.getvalue()
-
-        self.assertIn("Dispositivos Conectados (1)", output)
-        self.assertIn("10.42.0.12", output)
-        self.assertIn("aa:bb:cc:dd:ee:ff", output)
-
-    @patch("thinkisp.ui.cli.kick_client", return_value=(True, "Expulsado"))
-    def test_cmd_kick(self, mock_kick):
-        args = argparse.Namespace(command="kick", target="00:11:22:33:44:55")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_kick(args)
-            output = mock_out.getvalue()
-
-        self.assertIn("Expulsado", output)
-        mock_kick.assert_called_once_with("00:11:22:33:44:55")
-
-    @patch("thinkisp.ui.cli.unkick_client", return_value=(True, "Desbloqueado"))
-    def test_cmd_unkick(self, mock_unkick):
-        args = argparse.Namespace(command="unkick", target="00:11:22:33:44:55")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_unkick(args)
-            output = mock_out.getvalue()
-
-        self.assertIn("Desbloqueado", output)
-        mock_unkick.assert_called_once_with("00:11:22:33:44:55")
-
-    @patch("thinkisp.ui.cli.get_blocked_clients", return_value=["00:11:22:33:44:55"])
-    def test_cmd_blocked(self, mock_blocked):
-        args = argparse.Namespace(command="blocked")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_blocked(args)
-            output = mock_out.getvalue()
-
-        self.assertIn("00:11:22:33:44:55", output)
-
-    @patch("thinkisp.ui.cli.set_stealth_mode")
-    @patch("thinkisp.ui.cli.get_stealth_mode", return_value=True)
-    def test_cmd_stealth(self, mock_get_st, mock_set_st):
-        # Query status
-        args_stat = argparse.Namespace(command="stealth", mode="status")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_stealth(args_stat)
-            self.assertIn("ACTIVADO (Red invisible)", mock_out.getvalue())
-
-        # Enable
-        args_on = argparse.Namespace(command="stealth", mode="on")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_stealth(args_on)
-            self.assertIn("Modo Stealth ACTIVADO", mock_out.getvalue())
-        mock_set_st.assert_called_with(True)
-
-    @patch("thinkisp.ui.cli.set_band", return_value=(True, "Banda cambiada a 5g."))
-    def test_cmd_band(self, mock_band):
-        args = argparse.Namespace(command="band", band="5g")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_band(args)
-            self.assertIn("Banda cambiada a 5g", mock_out.getvalue())
-        mock_band.assert_called_once_with("5g")
-
-    @patch("thinkisp.ui.cli.set_gaming_mode", return_value=(True, "Modo Gaming activado"))
-    def test_cmd_gaming(self, mock_gaming):
-        args = argparse.Namespace(command="gaming", mode="on")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_gaming(args)
-            self.assertIn("Modo Gaming activado", mock_out.getvalue())
-        mock_gaming.assert_called_once_with(True)
-
-    @patch("thinkisp.ui.cli.set_rate_limit")
-    def test_cmd_limit(self, mock_limit):
-        args = argparse.Namespace(command="limit", speed_or_action="30m")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_limit(args)
-            self.assertIn("30.0 Mbps", mock_out.getvalue())
-        mock_limit.assert_called_once_with(30.0)
-
-    @patch("thinkisp.ui.cli.set_adblock", return_value=(True, "AdBlock activado"))
-    def test_cmd_adblock(self, mock_adblock):
-        args = argparse.Namespace(command="adblock", mode="on")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_adblock(args)
-            self.assertIn("AdBlock activado", mock_out.getvalue())
-        mock_adblock.assert_called_once_with(True)
-
-    @patch("thinkisp.ui.cli.set_dns_provider", return_value=(True, "DNS cambiado"))
-    def test_cmd_dns(self, mock_dns):
-        args = argparse.Namespace(command="dns", provider="cloudflare")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_dns(args)
-            self.assertIn("DNS cambiado", mock_out.getvalue())
-        mock_dns.assert_called_once_with("cloudflare")
-
-    @patch("thinkisp.ui.cli.set_timer_countdown", return_value=(True, "Temporizador programado"))
-    def test_cmd_timer(self, mock_timer):
-        args = argparse.Namespace(command="timer", action_or_duration="45m", extra_arg=None)
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_timer(args)
-            self.assertIn("Temporizador programado", mock_out.getvalue())
-        mock_timer.assert_called_once_with(2700)
-
-    @patch("thinkisp.ui.cli.run_speedtest")
-    @patch("thinkisp.ui.cli.get_ethernet_status", return_value={"interface": ETH_IFACE, "connected": True, "speed": "1000Mb/s"})
-    def test_cmd_speed(self, mock_eth, mock_test):
-        mock_test.return_value = {
-            "ping_ms": 12.4,
-            "down_mbps": 850.5,
-            "down_mbs": 101.3,
-            "up_mbps": 420.2,
-            "up_mbs": 50.1,
-            "error": None
-        }
-        args = argparse.Namespace(command="speed")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_speed(args)
-            output = mock_out.getvalue()
-
-        self.assertIn("850.5 Mbps", output)
-        self.assertIn("12.4 ms", output)
-
-    @patch("thinkisp.ui.cli.load_state")
-    @patch("thinkisp.ui.cli.get_iface_bytes", return_value=(1000000, 2000000))
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_stats(self, mock_active, mock_bytes, mock_load):
-        mock_load.return_value = {
-            "session": {"start_time": 1000.0, "start_rx": 500000, "start_tx": 1000000}
-        }
-        args = argparse.Namespace(command="stats")
-        with patch("time.time", return_value=1100.0):
-            with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-                cmd_stats(args)
-                output = mock_out.getvalue()
-
-        self.assertIn("SESIÓN EN CURSO", output)
-        self.assertIn("1m 40s", output)
-
-    @patch("thinkisp.ui.cli.get_connected_clients", return_value=[{"ip": "10.42.0.2"}])
-    @patch("thinkisp.ui.cli.get_hotspot_ip", return_value="10.42.0.1/24")
-    @patch("thinkisp.ui.cli.get_ethernet_status", return_value={"connected": True, "speed": "1000Mb/s"})
-    @patch("thinkisp.ui.cli.load_state", return_value={})
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_widget(self, mock_active, mock_load, mock_eth, mock_ip, mock_clients):
-        args = argparse.Namespace(command="widget", watch=False)
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_widget(args)
-            output = mock_out.getvalue().strip()
-
-        data = json.loads(output)
-        self.assertEqual(data["alt"], "active")
-        self.assertEqual(data["clients"], 1)
-        self.assertEqual(data["percentage"], 100)
-
-    @patch("shutil.which", return_value=None)
-    def test_cmd_qr(self, mock_which):
-        args = argparse.Namespace(command="qr")
-        with patch("sys.stdout", new_callable=io.StringIO) as mock_out:
-            cmd_qr(args)
-            output = mock_out.getvalue()
-
-        self.assertIn(DEFAULT_SSID, output)
-        self.assertIn(DEFAULT_PSK, output)
-
-    @patch("thinkisp.ui.cli.cmd_off")
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=True)
-    def test_cmd_toggle_turns_off(self, mock_active, mock_off):
-        args = argparse.Namespace(command="toggle")
-        cmd_toggle(args)
-        mock_off.assert_called_once_with(args)
-
-    @patch("thinkisp.ui.cli.cmd_on")
-    @patch("thinkisp.ui.cli.is_hotspot_active", return_value=False)
-    def test_cmd_toggle_turns_on(self, mock_active, mock_on):
-        args = argparse.Namespace(command="toggle")
-        cmd_toggle(args)
-        mock_on.assert_called_once_with(args)
+    def test_cancelled_configuration_returns_130(self):
+        with patch('sys.argv', ['thinkisp', 'setup']), patch('main.cmd_setup', side_effect=KeyboardInterrupt), patch('sys.stderr', new_callable=io.StringIO):
+            self.assertEqual(main(), 130)
 
 
 class TestCliParserRouting(unittest.TestCase):

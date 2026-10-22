@@ -1,188 +1,102 @@
-"""
-ThinkISP - Módulo de Calidad de Servicio (QoS), CAKE y Traffic Shaping
-"""
+"""thinkISP · Calidad de servicio con errores comprobados y sin perfiles de hardware."""
 
-from pathlib import Path
-import shutil
+import math
+import re
 
-from thinkisp.config import HOTSPOT_CONN, THINKPAD_MODE_BIN
-from thinkisp.core.network import (
-    is_hotspot_active,
-    load_state,
-    notify,
-    run_cmd,
-    save_state,
-)
-from thinkisp.core.wifi import apply_zero_latency_optimizations
+from thinkisp.config import HOTSPOT_CONN, WLAN_IFACE
+from thinkisp.core.network import ThinkISPError, is_hotspot_active, load_state, notify, run_cmd, save_state, state_lock
+from thinkisp.core.profile import apply_radio_settings, require_hotspot_profile
 
 
 def get_gaming_mode():
-    """Consulta si el modo Gaming (CAKE) está activo."""
-    state = load_state()
-    return state.get("gaming_mode", False)
-
-
-def set_gaming_mode(enabled):
-    """Activa o desactiva colas inteligentes CAKE y prioridad UDP."""
-    state = load_state()
-    if enabled:
-        run_cmd([
-            "nmcli", "connection", "modify", HOTSPOT_CONN,
-            "tc.qdiscs", "root cake",
-            "802-11-wireless.powersave", "2"
-        ])
-        apply_zero_latency_optimizations()
-
-        if THINKPAD_MODE_BIN.exists():
-            try:
-                run_cmd([str(THINKPAD_MODE_BIN), "performance"])
-            except Exception:
-                pass
-
-        if is_hotspot_active():
-            run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-            apply_zero_latency_optimizations()
-
-        state["gaming_mode"] = True
-        save_state(state)
-        notify("🎮 Modo Gaming Activado", "Prioridad UDP | CAKE Anti-Bufferbloat | 0 Latencia")
-        return True, "Modo Gaming (CAKE) activado."
-    else:
-        run_cmd(["nmcli", "connection", "modify", HOTSPOT_CONN, "tc.qdiscs", ""])
-        state["gaming_mode"] = False
-        save_state(state)
-
-        if is_hotspot_active():
-            run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-            apply_zero_latency_optimizations()
-
-        notify("Modo Gaming Desactivado", "Colas estándar de red restauradas.")
-        return True, "Modo Gaming desactivado."
+    return load_state().get("gaming_mode", False)
 
 
 def get_rate_limit():
-    """Obtiene el límite de velocidad actual configurado."""
-    state = load_state()
-    return state.get("rate_limit")
+    return load_state().get("rate_limit")
+
+
+def _configure_qdisc(value, expected=None, powersave=None):
+    active = is_hotspot_active(check=True)
+    args = ["nmcli", "connection", "modify", "id", HOTSPOT_CONN, "tc.qdiscs", value]
+    if powersave is not None:
+        args += ["802-11-wireless.powersave", powersave]
+    run_cmd(args, check=True)
+    if active:
+        run_cmd(["nmcli", "--wait", "60", "connection", "up", "id", HOTSPOT_CONN], check=True, timeout=65)
+        apply_radio_settings(require_hotspot_profile())
+        actual = run_cmd(["tc", "qdisc", "show", "dev", WLAN_IFACE], check=True)
+        kinds = re.findall(r"qdisc (\S+) .*?\broot\b", actual)
+        if expected and expected not in kinds:
+            raise ThinkISPError(f"La cola {expected} no se encontró en {WLAN_IFACE} después de aplicar el perfil.")
+        if not expected and any(kind in ("cake", "tbf") for kind in kinds):
+            raise ThinkISPError(f"La cola anterior continúa aplicada en {WLAN_IFACE}.")
+    return active
+
+
+def set_gaming_mode(enabled):
+    active = _configure_qdisc("root cake" if enabled else "", "cake" if enabled else None)
+    with state_lock() as state:
+        state["gaming_mode"] = bool(enabled)
+        state.pop("rate_limit", None)
+        save_state(state)
+    verb = "activado" if active else "configurado para el próximo encendido"
+    message = f"CAKE {verb}." if enabled else "Colas estándar restauradas en el perfil."
+    notify("thinkISP · QoS", message)
+    return True, message
 
 
 def set_rate_limit(mbps):
-    """Aplica control de tasa TBF (Token Bucket Filter) en el hotspot."""
-    state = load_state()
-    rate_bytes = int((float(mbps) * 1_000_000) / 8)
-
-    run_cmd([
-        "nmcli", "connection", "modify", HOTSPOT_CONN,
-        "tc.qdiscs", f"root tbf burst 32768 latency 50 rate {rate_bytes}"
-    ])
-
-    state["rate_limit"] = f"{mbps} Mbps"
-    save_state(state)
-
-    if is_hotspot_active():
-        run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-        apply_zero_latency_optimizations()
-
-    notify("Límite de Ancho de Banda", f"Zona Wi-Fi limitada a {mbps} Mbps.")
-    return True, f"Límite de ancho de banda fijado en {mbps} Mbps."
+    try:
+        rate = float(mbps)
+    except (TypeError, ValueError) as exc:
+        raise ThinkISPError("El límite debe ser una velocidad numérica positiva.") from exc
+    if not math.isfinite(rate) or rate <= 0:
+        raise ThinkISPError("El límite debe ser una velocidad finita mayor que cero.")
+    rate_bytes = int(rate * 1_000_000 / 8)
+    active = _configure_qdisc(f"root tbf burst 32768 latency 50 rate {rate_bytes}", "tbf")
+    with state_lock() as state:
+        state["rate_limit"] = f"{rate:g} Mbps"
+        state["gaming_mode"] = False
+        save_state(state)
+    message = f"Límite de {rate:g} Mbps {'aplicado' if active else 'guardado para el próximo encendido'}."
+    notify("thinkISP · Ancho de banda", message)
+    return True, message
 
 
 def clear_rate_limit():
-    """Elimina el límite de velocidad del hotspot."""
-    state = load_state()
-    run_cmd(["nmcli", "connection", "modify", HOTSPOT_CONN, "tc.qdiscs", ""])
-    state.pop("rate_limit", None)
-    save_state(state)
-
-    if is_hotspot_active():
-        run_cmd(["nmcli", "connection", "up", HOTSPOT_CONN])
-        apply_zero_latency_optimizations()
-
-    notify("Límite Eliminado", "Transmisión a velocidad completa.")
-    return True, "Límite de velocidad eliminado."
+    _configure_qdisc("")
+    with state_lock() as state:
+        state.pop("rate_limit", None)
+        state["gaming_mode"] = False
+        save_state(state)
+    return True, "Límite de velocidad eliminado del perfil."
 
 
 def apply_boost_mode():
-    """Aplica todas las optimizaciones para exprimir la línea Gigabit."""
-    run_cmd([
-        "nmcli", "connection", "modify", HOTSPOT_CONN,
-        "802-11-wireless.band", "a",
-        "802-11-wireless.channel", "149",
-        "802-11-wireless.powersave", "2",
-        "tc.qdiscs", "root cake"
-    ])
-
-    apply_zero_latency_optimizations()
-    state = load_state()
-    state["gaming_mode"] = True
-    save_state(state)
-
-    if THINKPAD_MODE_BIN.exists():
-        try:
-            status_json = run_cmd([str(THINKPAD_MODE_BIN), "status"])
-            if status_json:
-                import json
-                data = json.loads(status_json)
-                curr_profile = data.get("profile")
-                if curr_profile and curr_profile != "performance":
-                    state["prev_tp_mode"] = curr_profile
-                    save_state(state)
-            run_cmd([str(THINKPAD_MODE_BIN), "performance"])
-        except Exception:
-            pass
-
-    notify("🚀 ISP BOOST Activado", "5GHz 80MHz | CAKE | 0 Latencia | ThinkPad Nuclear")
-    return True, "Modo Turbo Boost activado con éxito."
+    # No cambia banda, canal, potencia, identidad ni perfil de CPU del equipo.
+    active = _configure_qdisc("root cake", "cake", powersave="2")
+    with state_lock() as state:
+        state["gaming_mode"] = True
+        state.pop("rate_limit", None)
+        save_state(state)
+    message = "CAKE y ahorro de energía Wi-Fi desactivado: " + ("aplicados." if active else "guardados para el próximo encendido.")
+    notify("thinkISP · Boost", message)
+    return True, message
 
 
 def enable_gaming_mode():
-    """Activa colas inteligentes CAKE y prioridad UDP anti-jitter."""
     return set_gaming_mode(True)
 
 
 def disable_gaming_mode():
-    """Desactiva colas CAKE restaurando colas estándar."""
     return set_gaming_mode(False)
 
 
 def apply_rate_limit(mbps):
-    """Aplica control de tasa TBF (Token Bucket Filter) en el hotspot."""
     return set_rate_limit(mbps)
 
 
 def get_current_qos():
-    """Obtiene el estado completo de calidad de servicio y límites."""
     state = load_state()
-    return {
-        "gaming_mode": state.get("gaming_mode", False),
-        "rate_limit": state.get("rate_limit", None)
-    }
-
-
-def set_thinkpad_performance():
-    """Configura el perfil de máximo rendimiento de forma universal (thinkpad-mode / powerprofilesctl / sysfs)."""
-    # 1. thinkpad-mode si está presente en la laptop ThinkPad
-    if THINKPAD_MODE_BIN.exists():
-        try:
-            run_cmd([str(THINKPAD_MODE_BIN), "performance"])
-            return True
-        except Exception:
-            pass
-
-    # 2. freedesktop power-profiles-daemon (Estándar en Ubuntu, Fedora, Debian, Arch con GNOME o KDE)
-    if shutil.which("powerprofilesctl"):
-        try:
-            run_cmd(["powerprofilesctl", "set", "performance"])
-            return True
-        except Exception:
-            pass
-
-    # 3. sysfs cpufreq governor directo
-    try:
-        for p in Path("/sys/devices/system/cpu").glob("cpu*/cpufreq/scaling_governor"):
-            p.write_text("performance")
-        return True
-    except Exception:
-        pass
-
-    return False
+    return {"gaming_mode": state.get("gaming_mode", False), "rate_limit": state.get("rate_limit")}

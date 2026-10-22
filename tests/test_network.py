@@ -16,8 +16,10 @@ THINKISP_ROOT = Path(__file__).resolve().parent.parent
 if str(THINKISP_ROOT) not in sys.path:
     sys.path.insert(0, str(THINKISP_ROOT))
 
-from thinkisp.config import ETH_IFACE, HOTSPOT_CONN, WLAN_IFACE
+from thinkisp.config import HOTSPOT_CONN
+ETH_IFACE, WLAN_IFACE = "upstream-test", "wifi-test"
 from thinkisp.core.network import (
+    CommandError,
     apply_upstream_dns,
     enable_ip_forwarding,
     format_bytes,
@@ -109,13 +111,14 @@ class TestCommandExecutionAndNotify(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0, stdout="output line\n", stderr="")
         res = run_cmd(["echo", "hello"])
         self.assertEqual(res, "output line")
-        mock_run.assert_called_once_with(["echo", "hello"], capture_output=True, text=True, timeout=12)
+        self.assertEqual(mock_run.call_args.args[0], ["echo", "hello"])
+        self.assertEqual(mock_run.call_args.kwargs["env"]["LC_ALL"], "C")
 
     @patch("subprocess.run")
     def test_run_cmd_failure_with_check(self, mock_run):
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
-        res = run_cmd(["false"], check=True)
-        self.assertIsNone(res)
+        with self.assertRaisesRegex(CommandError, "error"):
+            run_cmd(["false"], check=True)
 
     @patch("subprocess.run")
     def test_run_cmd_timeout(self, mock_run):
@@ -173,6 +176,15 @@ class TestStateManagement(unittest.TestCase):
 
 class TestNetworkOperations(unittest.TestCase):
     """Tests for gateway, hotspot status, forwarding, interface stats, and NM integration."""
+
+    def setUp(self):
+        detected = patch('thinkisp.core.network.detect_eth_iface', return_value=ETH_IFACE)
+        detected.start()
+        self.addCleanup(detected.stop)
+        for name, value in [("ETH_IFACE", ETH_IFACE), ("WLAN_IFACE", WLAN_IFACE)]:
+            selected = patch(f"thinkisp.core.network.{name}", value)
+            selected.start()
+            self.addCleanup(selected.stop)
 
     @patch("thinkisp.core.network.run_cmd")
     def test_get_default_gateway_found(self, mock_run_cmd):
@@ -296,29 +308,19 @@ class TestNetworkOperations(unittest.TestCase):
     @patch("thinkisp.core.network.run_cmd")
     def test_get_upstream_connections(self, mock_run_cmd):
         mock_run_cmd.return_value = (
-            "Lab Ethernet:802-3-ethernet:uuid1\n"
-            "Office Ethernet:802-3-ethernet:uuid2\n"
+            f"Lab Ethernet:802-3-ethernet:{ETH_IFACE}\n"
+            "Office Ethernet:802-3-ethernet:another-interface\n"
             "Hotspot:802-11-wireless:uuid3"
         )
         conns = get_upstream_connections()
-        self.assertEqual(conns, ["Lab Ethernet", "Office Ethernet"])
+        self.assertEqual(conns, ["Lab Ethernet"])
 
-    @patch("thinkisp.core.network.run_cmd")
-    @patch("thinkisp.core.network.get_upstream_connections")
-    def test_apply_upstream_dns(self, mock_conns, mock_run_cmd):
-        mock_conns.return_value = ["Eth0"]
-
-        # Custom DNS
-        apply_upstream_dns("1.1.1.1 1.0.0.1")
-        mock_run_cmd.assert_called_with(
-            ["nmcli", "connection", "modify", "Eth0", "ipv4.dns", "1.1.1.1 1.0.0.1", "ipv4.ignore-auto-dns", "yes"]
-        )
-
-        # Reset to DHCP (None)
+    @patch('thinkisp.core.dns_state.configure_dns', return_value=(True, 'configured'))
+    def test_apply_upstream_dns_uses_recoverable_session(self, configure):
+        apply_upstream_dns('1.1.1.1 1.0.0.1')
+        configure.assert_called_with('cloudflare')
         apply_upstream_dns(None)
-        mock_run_cmd.assert_called_with(
-            ["nmcli", "connection", "modify", "Eth0", "ipv4.dns", "", "ipv4.ignore-auto-dns", "no"]
-        )
+        configure.assert_called_with(None)
 
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
@@ -351,7 +353,7 @@ class TestNetworkOperations(unittest.TestCase):
         self.assertEqual(get_hotspot_ip(), "10.42.0.1/24")
 
         mock_run_cmd.return_value = ""
-        self.assertEqual(get_hotspot_ip(), "10.42.0.1/24")
+        self.assertEqual(get_hotspot_ip(), "Sin datos")
 
 
 if __name__ == "__main__":

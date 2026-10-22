@@ -2,10 +2,10 @@
 # ThinkISP - Autocompletado para GNU Bash
 # ==============================================================================
 # Para activar en tu sesión:
-#   source /home/jssi/thinkisp/extras/completions/thinkisp.bash
+#   source ./extras/completions/thinkisp.bash
 #
 # Para instalación permanente:
-#   sudo cp /home/jssi/thinkisp/extras/completions/thinkisp.bash /etc/bash_completion.d/thinkisp
+#   sudo cp ./extras/completions/thinkisp.bash /etc/bash_completion.d/thinkisp
 #   O cópialo a ~/.local/share/bash-completion/completions/thinkisp
 # ==============================================================================
 
@@ -21,7 +21,7 @@ _thinkisp_completions() {
         cword=$COMP_CWORD
     fi
 
-    local commands="on off boost status clients speed top stats widget kick unkick blocked stealth timer gaming limit adblock dns qr band toggle tui"
+    local commands="doctor setup config on off recover boost status clients speed top stats widget kick unkick blocked stealth timer gaming limit adblock dns qr band toggle tui"
     local global_flags="-h --help"
 
     # Nivel 1: Subcomandos u opciones globales
@@ -38,6 +38,9 @@ _thinkisp_completions() {
     local cmd="${words[1]}"
 
     case "$cmd" in
+        doctor)
+            COMPREPLY=($(compgen -W "--json --help" -- "$cur"))
+            ;;
         widget|json)
             COMPREPLY=($(compgen -W "-w --watch -h --help" -- "$cur"))
             ;;
@@ -55,7 +58,7 @@ _thinkisp_completions() {
             ;;
 
         dns)
-            COMPREPLY=($(compgen -W "cloudflare google quad9 adguard default auto benchmark" -- "$cur"))
+            COMPREPLY=($(compgen -W "cloudflare google quad9 adguard default auto restore benchmark" -- "$cur"))
             ;;
 
         band)
@@ -92,7 +95,7 @@ _thinkisp_completions() {
             COMPREPLY=($(compgen -W "$blocked" -- "$cur"))
             ;;
 
-        on|off|boost|status|clients|speed|top|watch|stats|blocked|banlist|qr|toggle|tui)
+        setup|config|on|off|boost|status|clients|speed|top|watch|stats|blocked|banlist|qr|toggle|tui)
             if [[ "$cur" == -* ]]; then
                 COMPREPLY=($(compgen -W "$global_flags" -- "$cur"))
             fi

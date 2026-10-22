@@ -3,11 +3,17 @@ ThinkISP - Módulo de Red del Sistema y NetworkManager
 """
 
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import subprocess
 import time
+import tempfile
+import fcntl
+from contextlib import contextmanager
+from thinkisp.parsing import split_nmcli
+from thinkisp.errors import ThinkISPError
 
 from thinkisp.config import (
     DAEMON_PID_FILE,
@@ -17,17 +23,43 @@ from thinkisp.config import (
     STATE_FILE,
     TIMER_FILE,
     WLAN_IFACE,
+    detect_eth_iface,
 )
 
 
-def run_cmd(args, check=False, timeout=12):
-    """Ejecuta un comando del sistema de forma segura."""
+class CommandError(ThinkISPError):
+    def __init__(self, args, detail, returncode=None):
+        # Los errores de nmcli pueden repetir un argumento: nunca revelar PSK.
+        args = [str(arg) for arg in args]
+        for index, arg in enumerate(args[:-1]):
+            if args[index + 1] and any(name in arg for name in ("password", "psk", "wep-key")):
+                detail = detail.replace(args[index + 1], "[oculto]")
+        self.returncode = returncode
+        self.detail = detail
+        super().__init__(f"{args[0]}: {detail}")
+
+
+def run_cmd(args, check=False, timeout=12, input_text=None, strip=True):
+    """Las consultas opcionales devuelven None al fallar; check exige éxito."""
     try:
-        res = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-        if check and res.returncode != 0:
+        kwargs = {"input": input_text} if input_text is not None else {}
+        res = subprocess.run(
+            args, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout,
+            env={**os.environ, "LC_ALL": "C"}, **kwargs,
+        )
+        if res.returncode != 0:
+            if check:
+                raise CommandError(args, res.stderr.strip() or res.stdout.strip()
+                                   or f"salida {res.returncode}", res.returncode)
             return None
-        return res.stdout.strip()
-    except (subprocess.TimeoutExpired, OSError):
+        return res.stdout.strip() if strip else res.stdout.rstrip("\n")
+    except subprocess.TimeoutExpired as exc:
+        if check:
+            raise CommandError(args, f"tiempo de espera agotado ({timeout} s)") from exc
+        return None
+    except OSError as exc:
+        if check:
+            raise CommandError(args, str(exc)) from exc
         return None
 
 
@@ -47,20 +79,43 @@ def notify(title, message, icon="network-wireless-hotspot", urgency="normal"):
 def load_state():
     """Carga el archivo de estado persistente."""
     try:
-        if STATE_FILE.exists():
-            return json.loads(STATE_FILE.read_text())
-    except Exception:
-        pass
-    return {}
+        state = json.loads(STATE_FILE.read_text())
+        if not isinstance(state, dict):
+            raise ValueError("se esperaba un objeto JSON")
+        return state
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as exc:
+        raise ThinkISPError(f"No se pudo leer el estado en {STATE_FILE}: {exc}") from exc
 
 
 def save_state(state):
     """Guarda el archivo de estado persistente."""
+    temp_path = None
     try:
         STATE_DIR.mkdir(parents=True, exist_ok=True)
-        STATE_FILE.write_text(json.dumps(state, indent=2))
-    except Exception:
-        pass
+        with tempfile.NamedTemporaryFile(mode="w", dir=STATE_DIR, delete=False) as stream:
+            temp_path = Path(stream.name)
+            json.dump(state, stream, indent=2)
+        os.replace(temp_path, STATE_FILE)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ThinkISPError(f"No se pudo guardar el estado en {STATE_FILE}: {exc}") from exc
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def state_lock():
+    """Serializa operaciones de escritura entre CLI, dashboard y vigilante."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (STATE_DIR / "state.lock").open("a") as stream:
+        os.chmod(stream.name, 0o600)
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        try:
+            yield load_state()
+        finally:
+            fcntl.flock(stream, fcntl.LOCK_UN)
 
 
 def format_bytes(b):
@@ -114,19 +169,21 @@ def parse_duration_str(s):
 def parse_speed_mbps(s):
     """Convierte cadenas como 30m, 50mbps, 100, 500k a Mbps float."""
     s = s.strip().lower()
-    m = re.search(r"([0-9.]+)", s)
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)(k|m|g|kbps|mbps|gbps)?", s)
     if not m:
         return None
     val = float(m.group(1))
-    if "k" in s:
+    if (m.group(2) or "").startswith("k"):
         val /= 1000.0
-    elif "g" in s:
+    elif (m.group(2) or "").startswith("g"):
         val *= 1000.0
     return val
 
 
 def get_iface_bytes(iface):
     """Lee bytes recibidos y transmitidos de la interfaz desde sysfs."""
+    if not iface:
+        return 0, 0
     rx_path = Path(f"/sys/class/net/{iface}/statistics/rx_bytes")
     tx_path = Path(f"/sys/class/net/{iface}/statistics/tx_bytes")
     rx = int(rx_path.read_text().strip()) if rx_path.exists() else 0
@@ -134,58 +191,64 @@ def get_iface_bytes(iface):
     return rx, tx
 
 
-def is_hotspot_active():
+def is_hotspot_active(check=False):
     """Comprueba si el hotspot de NetworkManager está actualmente activo."""
-    out = run_cmd(["nmcli", "-t", "-f", "NAME,DEVICE,STATE", "connection", "show", "--active"])
+    out = run_cmd(["nmcli", "-t", "-f", "NAME,DEVICE,STATE", "connection", "show", "--active"], check=check)
     if not out:
         return False
     for line in out.splitlines():
-        parts = line.split(":")
-        if len(parts) >= 3 and parts[0] == HOTSPOT_CONN and parts[2] == "activated":
+        parts = split_nmcli(line)
+        if (len(parts) >= 3 and parts[0] == HOTSPOT_CONN
+                and parts[1] == WLAN_IFACE and parts[2] == "activated"):
             return True
     return False
 
 
-def get_current_wifi_connection():
+def get_current_wifi_connection(check=False):
     """Obtiene el nombre de la conexión Wi-Fi cliente activa antes de activar el hotspot."""
-    out = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE", "connection", "show", "--active"])
+    out = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE,DEVICE,STATE", "connection", "show", "--active"], check=check)
     if not out:
         return None
     for line in out.splitlines():
-        parts = line.split(":")
-        if len(parts) >= 4 and parts[1] == "802-11-wireless" and parts[0] != HOTSPOT_CONN:
+        parts = split_nmcli(line)
+        if (len(parts) >= 4 and parts[1] in ("802-11-wireless", "wifi")
+                and parts[2] == WLAN_IFACE and parts[0] != HOTSPOT_CONN):
             return parts[0]
     return None
 
 
 def get_upstream_connections():
-    """Obtiene las conexiones cableadas o de salida para propagar DNS."""
+    """Obtiene sólo los perfiles activos en la salida detectada del equipo."""
     conns = []
-    out = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE", "connection", "show"])
+    out = run_cmd(["nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active"], check=True)
     if out:
         for line in out.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 2 and parts[1] == "802-3-ethernet":
+            parts = split_nmcli(line)
+            if len(parts) >= 3 and parts[2] == ETH_IFACE and parts[0] != HOTSPOT_CONN:
                 conns.append(parts[0])
-    if not conns:
-        conns.append("Conexión cableada 1")
     return conns
 
 
 def apply_upstream_dns(dns_servers=None):
-    """Aplica servidores DNS upstream en conexiones Ethernet. Si es None, restablece a DHCP."""
-    conns = get_upstream_connections()
-    for conn in conns:
-        if dns_servers:
-            run_cmd(["nmcli", "connection", "modify", conn, "ipv4.dns", dns_servers, "ipv4.ignore-auto-dns", "yes"])
-        else:
-            run_cmd(["nmcli", "connection", "modify", conn, "ipv4.dns", "", "ipv4.ignore-auto-dns", "no"])
+    """Compatibilidad con la API anterior, usando ahora la sesión recuperable."""
+    from thinkisp.config import DNS_PROVIDERS
+    from thinkisp.core.dns_state import configure_dns
+    if dns_servers is None:
+        return configure_dns(None)
+    values = set(dns_servers.replace(',', ' ').split())
+    for key, provider in DNS_PROVIDERS.items():
+        if values == set(provider['servers'].split()):
+            return configure_dns(key)
+    raise ThinkISPError('Proveedor no registrado; configura los DNS personalizados en el panel técnico.')
 
 
 def get_ethernet_status():
-    """Comprueba el estado del cable de red Ethernet (escuela o laboratorio)."""
-    carrier_path = Path(f"/sys/class/net/{ETH_IFACE}/carrier")
-    operstate_path = Path(f"/sys/class/net/{ETH_IFACE}/operstate")
+    """Consulta la salida actual, incluso si cambió desde que abrió el panel."""
+    interface = detect_eth_iface(WLAN_IFACE)
+    if not interface:
+        return {'interface': None, 'connected': False, 'operstate': 'Sin salida', 'speed': 'Desconocida'}
+    carrier_path = Path(f"/sys/class/net/{interface}/carrier")
+    operstate_path = Path(f"/sys/class/net/{interface}/operstate")
     
     has_carrier = False
     if carrier_path.exists():
@@ -202,16 +265,17 @@ def get_ethernet_status():
             pass
 
     speed = "Desconocida"
-    if has_carrier:
-        eth_out = run_cmd(["ethtool", ETH_IFACE])
+    connected = has_carrier or operstate == 'up'
+    if connected:
+        eth_out = run_cmd(["ethtool", interface])
         if eth_out:
             m = re.search(r"Speed:\s*([^\n]+)", eth_out)
             if m:
                 speed = m.group(1)
 
     return {
-        "interface": ETH_IFACE,
-        "connected": has_carrier,
+        "interface": interface,
+        "connected": connected,
         "operstate": operstate,
         "speed": speed
     }
@@ -219,12 +283,14 @@ def get_ethernet_status():
 
 def get_hotspot_ip():
     """Obtiene la dirección IP local de la interfaz Wi-Fi compartida."""
+    if not WLAN_IFACE:
+        return "Sin datos"
     out = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", WLAN_IFACE])
     if out:
         m = re.search(r"inet\s+([0-9.]+/\d+)", out)
         if m:
             return m.group(1)
-    return "10.42.0.1/24"
+    return "Sin datos"
 
 
 def format_speed(bps):
@@ -270,7 +336,7 @@ def enable_ip_forwarding():
         return True
     except Exception:
         pass
-    return res is not None
+    return False
 
 
 def get_default_gateway():

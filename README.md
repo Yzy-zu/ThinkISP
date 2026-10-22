@@ -1,177 +1,172 @@
-# ⚡ ThinkISP - Portable High-Performance Router & Hotspot Suite for Linux
+# thinkISP
 
-<div align="center">
+Gestor de puntos de acceso para Linux. Permite configurar una red doméstica con las capacidades que el adaptador Wi-Fi y NetworkManager exponen en cada equipo.
 
-```text
-  ████████╗██╗  ██╗██╗███╗   ██╗██╗  ██╗██╗███████╗██████╗ 
-  ╚══██╔══╝██║  ██║██║████╗  ██║██║ ██╔╝██║██╔════╝██╔══██╗
-     ██║   ███████║██║██╔██╗ ██║█████╔╝ ██║███████╗██████╔╝
-     ██║   ██╔══██║██║██║╚██╗██║██╔═██╗ ██║╚════██║██╔═══╝ 
-     ██║   ██║  ██║██║██║ ╚████║██║  ██╗██║███████║██║     
-     ╚═╝   ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝╚══════╝╚═╝     
-```
+El programa detecta las interfaces del sistema y consulta al controlador sus canales, restricciones regulatorias y límites de potencia. No presupone una marca de computadora, un SSID, una contraseña, un canal ni una velocidad de enlace.
 
-**Convierte tu laptop Linux / ThinkPad en un Router de Alto Rendimiento (Gigabit Ethernet ➔ Wi-Fi 5GHz VHT80)**  
-*Zero-Latency | Bufferbloat Elimination (CAKE) | Network AdBlock | Interactive TUI | CLI Automation*
+## Instalación
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform: Linux](https://img.shields.io/badge/Platform-Linux-orange.svg)]()
-[![Python: 3.9+](https://img.shields.io/badge/Python-3.9+-brightgreen.svg)]()
-[![No Dependencies](https://img.shields.io/badge/Dependencies-Zero-success.svg)]()
-
-</div>
-
----
-
-## 📖 Descripción / Description
-
-**ThinkISP** es una suite completa diseñada para compartir internet desde tu laptop Linux (por ejemplo, conectada al cable Ethernet Gigabit de la escuela, universidad u oficina) hacia tus celulares, tablets y dispositivos móviles a través de Wi-Fi, exprimiendo hasta el último megabit y eliminando la latencia.
-
-Cuenta con una **interfaz interactiva TUI** (en terminal, navegable con teclado y ratón) y un conjunto de **comandos CLI** listos para integrar en barras como Waybar, QuickShell o atajos de teclado de Hyprland.
-
----
-
-## 🚀 Características Principales / Key Features
-
-* **⚡ Rendimiento Gigabit (5 GHz VHT80)**: Fuerza la antena a 5 GHz en el canal 149 con 80 MHz de ancho de banda, alcanzando tasas de enlace de hasta **867 Mbps PHY** en tarjetas Intel Dual Band Wireless-AC.
-* **🎯 Cero Latencia & Anti-Jitter**: Desactiva el ahorro de energía de la antena Wi-Fi (`power_save off`) para garantizar pings planos de **< 2 ms** sin micro-cortes.
-* **🎮 Modo Gaming & Anti-Bufferbloat (CAKE)**: Algoritmo de colas inteligentes **CAKE** en el kernel que prioriza paquetes de juegos, VoIP y Discord sobre descargas pesadas o streams 4K.
-* **🛡️ Bloqueador de Anuncios Universal (AdBlock DNS)**: Bloquea anuncios, ventanas emergentes y rastreadores en **todos los celulares y dispositivos conectados** sin instalar nada en los teléfonos.
-* **🌐 Selector & Benchmark de DNS**: Mide en tiempo real la latencia de Google, Cloudflare, Quad9 y AdGuard, permitiendo alternar al proveedor más rápido con una sola tecla.
-* **📱 Vigilante de Red & Notificaciones de Hyprland**: Te avisa mediante `notify-send` cada vez que un nuevo dispositivo se conecta o desconecta con su nombre de host e IP.
-* **🚫 Expulsión y Lista Negra Permanente (`kick / unkick`)**: Expulsa intrusos por IP o MAC al vuelo sin necesidad de apagar la zona Wi-Fi.
-* **🕵️ Modo Stealth (SSID Oculto)**: Oculta el nombre de la red de las balizas públicas de radio.
-* **⏳ Temporizador Inteligente**: Programa el apagado automático al finalizar tu clase (ej. `45m`) o por inactividad si no hay clientes conectados.
-* **📊 Telemetría en Vivo & Test de Velocidad**: Monitor de tráfico interactivo en tiempo real por cliente y speedtest integrado sin librerías externas.
-* **📱 Código QR en Terminal**: Muestra un código QR Unicode en pantalla para que tus compañeros apunten con la cámara del celular y se conecten al instante.
-
----
-
-## 🖥️ Interfaz Interactiva (TUI)
-
-Ejecuta simplemente `thinkisp` (o `isp`) sin argumentos para abrir el Dashboard interactivo:
-
-```text
-┌─── [ THINKISP: SPUTNIK HOTSPOT MANAGER ] ──────────────────────────────────────────┐
-│  ESTADO: ● ACTIVO   │  BANDA: 5 GHz (Ch 149 / 80MHz)  │  ETHERNET: Gigabit (1000M) │
-│  SSID: sputnik      │  IP GATEWAY: 10.42.0.1          │  TRÁFICO: ⬇ 42 MB/s ⬆ 3.1M │
-├────────────────────────────────────────────────────────────────────────────────────┤
-│  [ ACCIONES RÁPIDAS ]                                                              │
-│  [ Espacio ] Toggle Hotspot    [ B ] Modo Boost          [ G ] Modo Gaming (CAKE)  │
-│  [ A ] AdBlock DNS (AdGuard)   [ S ] Modo Stealth        [ T ] Temporizador Clase  │
-│  [ L ] Límite de Velocidad     [ D ] Selector DNS        [ P ] Test Velocidad      │
-├───────────────────────────────────────────────────────┬────────────────────────────┤
-│  DISPOSITIVOS CONECTADOS (2)                          │  MÉTRICAS & SESIÓN         │
-│  > [IP]            [MAC]               [SEÑAL] [MBPS] │  • Duración: 1h 14m 20s    │
-│  • 10.42.0.15     92:1c:df:28:fa:a7   -54 dBm   433  │  • Descargado: 4.82 GB     │
-│  • 10.42.0.42     a4:b2:39:10:02:ee   -62 dBm   280  │  • Subido:     640 MB      │
-│                                                       │  • IP Forwarding: Activo   │
-│  [ K ] Expulsar/Bloquear seleccionado                 │  • Firewall: trusted       │
-├───────────────────────────────────────────────────────┴────────────────────────────┤
-│  [Q] Código QR   │  [Tab] Cambiar Panel   │  [F5] Refrescar   │  [Esc/Ctrl+C] Salir│
-└────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Controles del Teclado
-| Tecla | Acción |
-| :--- | :--- |
-| `Espacio` | Encender / Apagar Zona Wi-Fi |
-| `B` | Activar Modo Boost (Máxima Velocidad) |
-| `G` | Alternar Modo Gaming (CAKE Anti-Bufferbloat) |
-| `A` | Alternar Bloqueador de Anuncios (AdGuard DNS) |
-| `S` | Alternar Modo Stealth (SSID Oculto) |
-| `T` | Configurar Temporizador de Apagado |
-| `L` | Configurar Límite de Velocidad (TBF Traffic Shaper) |
-| `D` | Selector de Proveedor DNS y Benchmark |
-| `P` | Test de Velocidad (Ping, Descarga y Subida) |
-| `Q` | Mostrar Código QR para Celulares |
-| `K` | Expulsar / Bloquear el dispositivo seleccionado |
-| `↑` / `↓` | Seleccionar dispositivo en la lista |
-| `Esc` / `q` | Salir del Dashboard |
-
----
-
-## 💻 Comandos CLI (Automatización y Scripts)
-
-Todos los controles pueden ejecutarse también directamente por línea de comandos:
+Requiere Linux, Python 3.9 o posterior y NetworkManager 1.40 o posterior con soporte de `nmcli --offline`, `iw` e `ip`. Para compartir la conexión, NetworkManager necesita su backend DHCP/DNS disponible; según la distribución puede requerir instalar `dnsmasq`. El adaptador debe anunciar soporte para modo AP.
 
 ```bash
-# Control básico
-thinkisp on                 # Enciende la zona Wi-Fi en 5GHz
-thinkisp off                # Apaga y restaura la red anterior
-thinkisp boost              # Activa modo turbo de máxima velocidad y latencia cero
-thinkisp status             # Muestra estado y clientes conectados
-thinkisp qr                 # Muestra código QR para conectar móviles
-
-# Optimización & Calidad de Servicio
-thinkisp gaming on/off      # Activa/desactiva colas CAKE anti-lag
-thinkisp limit 30m          # Limita el hotspot a 30 Mbps
-thinkisp limit reset        # Elimina el límite de velocidad
-thinkisp adblock on/off     # Activa/desactiva bloqueo de anuncios
-thinkisp dns benchmark      # Mide la latencia de todos los servidores DNS
-thinkisp dns cloudflare     # Cambia a 1.1.1.1 (o google, quad9, adguard, auto)
-
-# Seguridad & Control
-thinkisp kick 10.42.0.15    # Expulsa y bloquea por IP o MAC
-thinkisp unkick <MAC>       # Desbloquea un dispositivo
-thinkisp blocked            # Lista de bloqueados
-thinkisp stealth on/off     # Oculta o muestra el nombre de la red
-thinkisp timer 50m          # Apagado programado en 50 minutos
-thinkisp timer idle 10      # Apaga si pasan 10 min sin clientes
-
-# Monitoreo
-thinkisp top                # Monitor interactivo de tráfico en tiempo real
-thinkisp speed              # Test de velocidad del enlace
-thinkisp stats              # Estadísticas de datos de la sesión
-thinkisp widget             # Emite JSON para Waybar / QuickShell
-```
-
-*(Nota: El comando corto `isp` funciona como alias idéntico a `thinkisp`).*
-
----
-
-## 🛠️ Instalación / Installation
-
-### Requisitos
-* Linux (probado en Arch Linux, EndeavourOS, Fedora, Ubuntu, Debian).
-* Tarjeta Wi-Fi con soporte de modo Access Point (`AP`).
-* NetworkManager.
-* Python 3.9+ (utiliza solo la biblioteca estándar, **cero dependencias externas requeridas**).
-
-### Instalación Rápida
-```bash
-git clone https://github.com/Yzy-zu/ThinkISP.git
+git clone https://github.com/Yzy-zu/ThinkISP.git thinkisp
 cd thinkisp
 ./install.sh
+thinkisp
 ```
 
----
+El instalador crea lanzadores de usuario, una entrada de escritorio y autocompletado para Bash, Zsh y Fish. Respeta XDG_DATA_HOME y XDG_CONFIG_HOME; los destinos personalizados deben ser rutas absolutas. Instala las herramientas del sistema con el gestor de paquetes de tu distribución antes de ejecutarlo. Conserva el checkout: los lanzadores lo ejecutan directamente con el intérprete detectado durante la instalación.
 
-## 🧩 Compatibilidad y Shells
+También puedes trabajar directamente desde el checkout:
 
-ThinkISP es 100% agnóstico y portable en cualquier distribución Linux (Ubuntu, Debian, Fedora, Arch Linux, Pop!_OS, openSUSE) y entorno gráfico (GNOME, KDE Plasma, XFCE, Hyprland, Sway, i3).
+```bash
+python3 main.py
+```
 
-### Autocompletado de Shell (Bash, Zsh, Fish)
-El instalador `./install.sh` instala automáticamente el autocompletado nativo:
-- **Bash**: `~/.local/share/bash-completion/completions/thinkisp`
-- **Zsh**: `~/.zsh/completion/_thinkisp` (recuerda tener `fpath=(~/.zsh/completion $fpath)` en tu `~/.zshrc`)
-- **Fish**: `~/.config/fish/completions/thinkisp.fish`
+Herramientas adicionales por función: `tc` para verificar QoS, `qrencode` para códigos QR, `dig` para el benchmark DNS, `curl` para medir transferencia y `ethtool` para consultar la velocidad de la interfaz de salida. Las notificaciones usan `notify-send` cuando está disponible. El código Python utiliza la biblioteca estándar.
 
-### Salida JSON para Barras de Estado (`thinkisp widget`)
-Si usas cualquier barra de estado (Polybar, Waybar, i3blocks, QuickShell), `thinkisp widget` emite JSON compatible con el estándar FreeDesktop.
+## Compatibilidad y diagnóstico
 
----
+Puedes consultar requisitos, permisos, radio, canales y propiedades disponibles sin activar la red:
 
-## 🧪 Pruebas Automatizadas (Unit Tests)
+```bash
+python3 main.py doctor
+python3 main.py doctor --json
+```
 
-ThinkISP incluye una suite completa de pruebas unitarias sin dependencias externas:
+El informe distingue herramientas obligatorias, funciones opcionales y comprobaciones pendientes. No modifica perfiles, DNS, firewall o regulación, no solicita autorización y no consulta contraseñas. Una interfaz o un parser disponible no certifican una conexión Wi-Fi real. Consulta el [informe de compatibilidad y pruebas ejecutadas](docs/compatibility.md).
+
+## Primera ejecución y configuración
+
+Si no existe un perfil de thinkISP, `thinkisp`, `thinkisp tui` y `thinkisp on` abren el asistente antes de encender la red. El asistente solicita el SSID y la contraseña elegidos por el usuario; el nombre del equipo se usa únicamente como sugerencia inicial para el SSID.
+
+El panel permite revisar y editar:
+
+- SSID, contraseña y seguridad personal aceptada por el backend. Si la tarjeta no informa su soporte para WPA3, el panel lo señala como sin confirmar y la activación puede ser rechazada.
+- Banda, canal y ancho de canal, según las capacidades del controlador y de NetworkManager.
+- Límite de potencia de transmisión, respetando los límites anunciados para los canales seleccionados.
+- Red visible u oculta, ahorro de energía y MTU.
+- Aislamiento entre clientes y protección de tramas de gestión cuando NetworkManager los expone.
+- Dirección/subred IPv4 y opciones de DHCP disponibles en la versión instalada.
+- Propiedades técnicas adicionales de Wi-Fi, seguridad, IPv4, IPv6 y control de tráfico mediante el editor avanzado.
+
+La vista de capacidades muestra la información completa de la radio y las restricciones regulatorias del sistema. El editor avanzado obtiene su lista de propiedades del `nmcli` instalado; una propiedad aceptada por el parser puede todavía ser rechazada por el controlador al aplicar la configuración. Ese rechazo se informa como error.
+
+Para volver al panel:
+
+```bash
+thinkisp setup
+# Alias:
+thinkisp config
+```
+
+En el panel, presiona **C** o selecciona **Configurar**. El editor se abre en la misma terminal y, al terminar, vuelve al panel.
+
+Seleccionar **Guardar** valida los ajustes antes de escribirlos en NetworkManager. Si el hotspot está activo, intenta aplicar los cambios reiniciándolo. **Cancelar** antes de guardar no crea ni modifica un perfil.
+
+La selección automática de banda y canal queda a cargo de NetworkManager. Un ancho de canal fijo requiere seleccionar banda y canal. No se ofrecen canales marcados como deshabilitados o sin autorización para iniciar transmisión (`no IR`). El programa consulta el dominio regulatorio del sistema y no fuerza un país. Los canales DFS dependen del soporte de detección de radar del controlador y pueden requerir espera o ser rechazados.
+
+La potencia personalizada se aplica con `iw` como límite en dBm. Requiere los permisos que determine el sistema. Si falla al arrancar, el programa intenta apagar el AP y restaurar la Wi-Fi anterior; si esa recuperación también falla, informa ambos errores. La opción automática inicial no ejecuta cambios privilegiados de potencia.
+
+Las credenciales se guardan en NetworkManager. El JSON de estado de thinkISP no almacena la contraseña. Una ejecución sin terminal no inventa credenciales ni crea una red: requiere completar primero `thinkisp setup`.
+
+## Perfiles e interfaces
+
+El perfil predeterminado lleva el nombre del proyecto. Si existe, conserva sus ajustes. Un perfil con el mismo nombre que no sea un AP se rechaza en lugar de sobrescribirlo.
+
+Variables opcionales:
+
+| Variable | Uso |
+| --- | --- |
+| `THINKISP_PROFILE` | Nombre del perfil que se va a configurar y gestionar. |
+| `THINKISP_WLAN` | Interfaz Wi-Fi elegida por el usuario cuando hay varios adaptadores. |
+| `THINKISP_ETH` | Interfaz de salida elegida por el usuario. |
+| `THINKISP_SSID` | Sugerencia inicial de SSID en el asistente; no reemplaza un perfil existente. |
+| `XDG_STATE_HOME` | Directorio base de los archivos de estado del usuario. |
+
+La detección prefiere el adaptador vinculado al perfil existente; para un perfil nuevo, prefiere un adaptador que anuncie modo AP. No sustituye una interfaz ausente por nombres supuestos. Si cambias de adaptador, vuelve a ejecutar el proceso y revisa el panel.
+
+## Comandos
+
+```bash
+thinkisp on
+thinkisp off
+thinkisp status
+thinkisp clients
+thinkisp qr
+thinkisp widget
+thinkisp widget --watch
+thinkisp top
+thinkisp stats
+thinkisp timer 45m
+thinkisp timer idle 10
+thinkisp timer cancel
+thinkisp stealth on
+thinkisp stealth off
+thinkisp band auto
+thinkisp gaming on
+thinkisp gaming off
+thinkisp limit 30m
+thinkisp limit reset
+thinkisp boost
+thinkisp dns benchmark
+thinkisp dns cloudflare
+thinkisp adblock on
+thinkisp adblock off
+thinkisp speed
+```
+
+`isp` es un alias de `thinkisp`. Consulta `thinkisp --help` para los argumentos disponibles.
+
+El estado, el widget y el QR consultan el perfil y la interfaz del equipo. Si no se puede obtener un dato de radio, se muestra «Sin datos». Las consultas no muestran la contraseña salvo en la función explícita de conexión/QR.
+
+Los fallos operativos se imprimen en stderr y el CLI termina con código 1. Una cancelación interactiva termina con código 130. Las operaciones requeridas comprueban el resultado del comando antes de anunciar éxito o guardar un estado de éxito.
+
+## Panel de terminal
+
+Abre `thinkisp tui` (o `python3 main.py tui` desde el proyecto). Necesita al menos **76 columnas × 24 filas**; una ventana más amplia muestra más dispositivos y columnas de enlace.
+
+La pantalla separa conexión, tráfico de la sesión, acciones y dispositivos. Los nombres de red, interfaces, radio y equipos se consultan al sistema. **Tab** cambia de panel; las **flechas** mueven la selección y **Enter** abre una acción o los detalles del dispositivo. **RePág/AvPág** e **Inicio/Fin** recorren listas largas. **?** muestra los atajos. El ratón permite seleccionar acciones, opciones y botones de los diálogos.
+
+Las consultas se ejecutan en segundo plano con un intervalo de dos segundos entre lecturas. El teclado se atiende cada 100 ms mientras no haya una interacción externa del sistema. Si una lectura falla, se conserva la última muestra y se marca como sin actualizar. Los resultados anteriores a un cambio de configuración se descartan. Durante las mediciones DNS y de transferencia puedes cerrar el diálogo y seguir navegando; la telemetría continúa.
+
+Los cambios de red se procesan uno a la vez y muestran su progreso. **Q** cierra el panel conservando el estado del hotspot; si se está aplicando un cambio, espera a que termine antes de salir. **O** apaga o enciende la red. **C** abre el editor técnico interactivo en la misma terminal.
+
+**R** consulta las credenciales y genera el QR una vez por apertura. Si no cabe completo, solicita ampliar la ventana y conserva los datos para conectarse manualmente. En los detalles de un dispositivo puedes bloquear o permitir su acceso; la pantalla distingue la configuración de bloqueo de la asociación Wi-Fi.
+
+## Alcance actual
+
+- CAKE y el límite TBF ocupan la cola raíz: configurar uno sustituye al otro. Con el AP activo, se consulta `tc` para comprobar la cola antes de anunciar el cambio. Con el AP apagado, se indica que la configuración queda para el siguiente encendido.
+- Boost configura CAKE y desactiva el ahorro de energía Wi-Fi. Conserva banda, canal y potencia; no cambia el perfil de CPU del equipo ni garantiza una latencia o velocidad determinadas.
+- DNS aplica cambios temporales al perfil activo de la salida detectada, identificado por UUID. Guarda antes los DNS IPv4/IPv6 y sus opciones automáticas; al apagar restaura esa configuración, incluidos DNS manuales. `thinkisp dns restore` (también `auto` o `default`) restaura la configuración anterior. Apagar AdBlock recupera el proveedor que habías seleccionado antes de activarlo. Con el AP apagado, las preferencias se aplican en el siguiente encendido.
+- El monitor muestra transferencia global. La transferencia individual por cliente está pendiente y aparece como «No medido».
+- `kick IP_o_MAC` bloquea el acceso del cliente al equipo/router e Internet mediante nftables en la interfaz del AP; `unkick MAC` lo permite de nuevo y `blocked` lista las preferencias guardadas. Los bloqueos se aplican antes de abrir el AP y se retiran al apagarlo, conservando la lista para la siguiente sesión. El cliente puede seguir asociado al Wi-Fi; el aislamiento entre clientes se configura aparte según lo que soporte el adaptador.
+- El control de acceso necesita `nft` y permisos de administración de red. Desde una sesión interactiva puede solicitar autorización con `pkexec`; el monitor en segundo plano no abre solicitudes de autorización. Las reglas se limitan a una tabla propia por usuario y perfil; no se vacía el firewall del sistema.
+- Los cambios DNS y de acceso llevan un registro de recuperación. Si una restauración falla, se informa y se conserva el registro para reintentar con `thinkisp recover`, con el AP apagado. Si otro programa cambió el DNS durante la sesión, thinkISP informa el conflicto y conserva los datos anteriores sin sobrescribir ese cambio.
+- La compatibilidad de una configuración de radio debe confirmarse con el adaptador y el sistema de destino. No se garantiza soporte de AP únicamente por tener Wi-Fi, ni se promete un ancho o tasa de transferencia fija.
+
+## Pruebas
 
 ```bash
 python3 tests/run_tests.py
 ```
 
----
+Incluyen errores de permisos y activación, datos dinámicos de interfaz, validación de radio, creación y conservación de perfiles, cancelación del asistente, manejo de errores en CLI/TUI y comprobaciones offline de NetworkManager cuando `nmcli` está instalado. Las pruebas no activan ni reconfiguran la red real.
 
-## 📄 Licencia
+Para comprobar teclado, diálogos, resultados de fondo y redimensionamiento con curses real en un pseudoterminal, usando datos de prueba sin modificar la red:
 
-Distribuido bajo la Licencia **MIT**. Consulta el archivo [`LICENSE`](LICENSE) para más detalles.
+```bash
+python3 tests/integration/tui_roundtrip.py
+```
+
+La prueba de integración del firewall requiere Linux, `nft`, `ip`, `ping` y soporte de namespaces de usuario/red. Comprueba bloqueo y desbloqueo IPv4/IPv6 y conservación de tablas ajenas en redes virtuales aisladas:
+
+```bash
+unshare --user --map-root-user --net python3 tests/integration/nft_roundtrip.py
+```
+
+Las comprobaciones con mocks, redes virtuales y perfiles offline no sustituyen una prueba de conexión, DHCP, navegación y apagado con un cliente Wi-Fi real.
+
+## Licencia
+
+[MIT](LICENSE).

@@ -6,46 +6,61 @@ ThinkISP - Entrypoint Principal (Dual Mode: TUI Interactivo & CLI Scriptable)
 import argparse
 import sys
 
-from thinkisp.core.network import is_hotspot_active
-from thinkisp.ui.cli import (
-    cmd_adblock,
-    cmd_band,
-    cmd_blocked,
-    cmd_boost,
-    cmd_clients,
-    cmd_dns,
-    cmd_gaming,
-    cmd_kick,
-    cmd_limit,
-    cmd_off,
-    cmd_on,
-    cmd_qr,
-    cmd_speed,
-    cmd_stats,
-    cmd_status,
-    cmd_stealth,
-    cmd_timer,
-    cmd_toggle,
-    cmd_top,
-    cmd_unkick,
-    cmd_widget,
-)
+from thinkisp.errors import ThinkISPError
+
+
+def _handler(name):
+    # --help y el parser funcionan sin consultar NM, cargar curses ni detectar hardware.
+    def dispatch(args):
+        from thinkisp.ui import cli
+        return getattr(cli, name)(args)
+    return dispatch
+
+
+cmd_adblock = _handler('cmd_adblock')
+cmd_band = _handler('cmd_band')
+cmd_blocked = _handler('cmd_blocked')
+cmd_boost = _handler('cmd_boost')
+cmd_clients = _handler('cmd_clients')
+cmd_dns = _handler('cmd_dns')
+cmd_gaming = _handler('cmd_gaming')
+cmd_kick = _handler('cmd_kick')
+cmd_limit = _handler('cmd_limit')
+cmd_off = _handler('cmd_off')
+cmd_on = _handler('cmd_on')
+cmd_qr = _handler('cmd_qr')
+cmd_speed = _handler('cmd_speed')
+cmd_stats = _handler('cmd_stats')
+cmd_status = _handler('cmd_status')
+cmd_stealth = _handler('cmd_stealth')
+cmd_timer = _handler('cmd_timer')
+cmd_toggle = _handler('cmd_toggle')
+cmd_top = _handler('cmd_top')
+cmd_unkick = _handler('cmd_unkick')
+cmd_widget = _handler('cmd_widget')
+cmd_setup = _handler('cmd_setup')
+cmd_recover = _handler('cmd_recover')
+cmd_doctor = _handler('cmd_doctor')
 
 
 def build_parser():
     """Construye el parser de argumentos de ThinkISP."""
     parser = argparse.ArgumentParser(
         prog="thinkisp",
-        description="ThinkISP - Suite de Zona Wi-Fi de Alto Rendimiento para Linux / ThinkPad"
+        description="thinkISP - Configuración y gestión de un punto de acceso Linux"
     )
     subparsers = parser.add_subparsers(dest="command")
+    doctor = subparsers.add_parser('doctor', help='Diagnóstico de compatibilidad sin modificar la red')
+    doctor.add_argument('--json', action='store_true', help='Informe JSON para soporte y automatización')
 
     # Básicos
-    subparsers.add_parser("on", help="Activa la zona Wi-Fi (sputnik)")
+    subparsers.add_parser("setup", aliases=["config"], help="Panel de configuración según las capacidades del equipo")
+    subparsers.add_parser("on", help="Configura si es necesario y activa la zona Wi-Fi")
     subparsers.add_parser("off", help="Desactiva la zona Wi-Fi y restaura la conexión previa")
-    subparsers.add_parser("boost", help="Modo máxima velocidad, 0 latencia y CPU Performance")
+    subparsers.add_parser("boost", help="Configura CAKE y desactiva ahorro de energía Wi-Fi")
     subparsers.add_parser("status", help="Muestra el estado y dispositivos conectados")
     subparsers.add_parser("clients", help="Lista dispositivos conectados con su señal y velocidad")
+    subparsers.add_parser("recover", help="Reintenta restaurar DNS y conexión anterior con el hotspot apagado")
 
     # 1 a 4: Telemetría & Monitoreo
     subparsers.add_parser("speed", help="Test de velocidad real (Ping, Descarga y Subida)")
@@ -55,9 +70,9 @@ def build_parser():
     widget_parser.add_argument("-w", "--watch", action="store_true", help="Emitir actualizaciones continuas cada 2s")
 
     # 5 a 8: Seguridad & Control de Acceso
-    kick_parser = subparsers.add_parser("kick", help="Expulsa y bloquea permanentemente a un intruso por IP o MAC")
+    kick_parser = subparsers.add_parser("kick", help="Bloquea el acceso de una MAC al router e Internet")
     kick_parser.add_argument("target", help="IP o dirección MAC a bloquear")
-    unkick_parser = subparsers.add_parser("unkick", help="Desbloquea una dirección MAC")
+    unkick_parser = subparsers.add_parser("unkick", help="Retira el bloqueo de acceso de una MAC")
     unkick_parser.add_argument("target", help="Dirección MAC a desbloquear")
     subparsers.add_parser("blocked", help="Lista las direcciones MAC bloqueadas")
     stealth_parser = subparsers.add_parser("stealth", help="Modo invisible (ocultar/mostrar SSID)")
@@ -77,7 +92,7 @@ def build_parser():
     adblock_parser.add_argument("mode", choices=["on", "off", "status", "toggle"], nargs="?", default="toggle", help="Activar/desactivar adblock")
 
     dns_parser = subparsers.add_parser("dns", help="Selector y benchmark de servidores DNS de ultra baja latencia")
-    dns_parser.add_argument("provider", nargs="?", default=None, help="Proveedor ('cloudflare', 'google', 'quad9', 'adguard', 'auto', 'benchmark')")
+    dns_parser.add_argument("provider", nargs="?", default=None, help="Proveedor ('cloudflare', 'google', 'quad9', 'adguard', 'restore', 'auto', 'benchmark')")
 
     # Extras
     subparsers.add_parser("qr", help="Muestra el código QR para conectar móviles")
@@ -89,7 +104,7 @@ def build_parser():
     return parser
 
 
-def main():
+def _main():
     parser = build_parser()
     args = parser.parse_args()
 
@@ -99,15 +114,16 @@ def main():
             from thinkisp.ui.tui import launch_tui
             launch_tui()
             return
-        except ImportError:
-            # Si el TUI aún no está listo o no se puede cargar, mostrar estado
-            if is_hotspot_active():
-                cmd_status(args)
-            else:
-                parser.print_help()
-            return
+        except ImportError as exc:
+            raise ThinkISPError("El panel necesita el módulo curses de Python. Instálalo con el gestor de paquetes de tu distribución o usa los comandos CLI.") from exc
 
-    if args.command == "on":
+    if args.command == 'doctor':
+        cmd_doctor(args)
+    elif args.command in ("setup", "config"):
+        cmd_setup(args)
+    elif args.command == "recover":
+        cmd_recover(args)
+    elif args.command == "on":
         cmd_on(args)
     elif args.command == "off":
         cmd_off(args)
@@ -151,5 +167,23 @@ def main():
         cmd_band(args)
 
 
+def main():
+    if not sys.platform.startswith('linux'):
+        print('thinkISP: se necesita Linux con NetworkManager; este sistema no está soportado.', file=sys.stderr)
+        return 1
+    if sys.version_info < (3, 9):
+        print('thinkISP: se necesita Python 3.9 o posterior.', file=sys.stderr)
+        return 1
+    try:
+        _main()
+        return 0
+    except (ThinkISPError, OSError) as exc:
+        print(f"thinkISP: {exc}", file=sys.stderr)
+        return 1
+    except (KeyboardInterrupt, EOFError):
+        print("thinkISP: operación cancelada.", file=sys.stderr)
+        return 130
+
+
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

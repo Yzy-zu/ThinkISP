@@ -1,121 +1,96 @@
 #!/usr/bin/env bash
-# ==========================================================
-# ThinkISP - Instalador Rápido de 1 Paso
-# ==========================================================
-
-set -e
-
-BOLD="\033[1m"
-GREEN="\033[1;32m"
-CYAN="\033[1;36m"
-YELLOW="\033[1;33m"
-RED="\033[1;31m"
-RESET="\033[0m"
-
-echo -e "\n${BOLD}${CYAN}═══════════════════════════════════════════════════════════${RESET}"
-echo -e "${BOLD}${CYAN}   🚀 INSTALADOR THINKISP - PORTABLE ROUTER SUITE          ${RESET}"
-echo -e "${BOLD}${CYAN}═══════════════════════════════════════════════════════════${RESET}\n"
-
-# 1. Comprobar Python 3
-if ! command -v python3 &>/dev/null; then
-    echo -e "${RED}✖ Error: Python 3 no está instalado.${RESET}"
-    exit 1
-fi
-echo -e "  ${GREEN}✔ Python 3 detectado:${RESET} $(python3 --version)"
-
-# 2. Comprobar herramientas clave
-for tool in nmcli iw ip curl; do
-    if command -v "$tool" &>/dev/null; then
-        echo -e "  ${GREEN}✔ $tool detectado.${RESET}"
-    else
-        echo -e "  ${RED}✖ Advertencia: $tool no está instalado.${RESET}"
-    fi
-done
-
-# 3. Herramientas opcionales recomendadas
-for opt in qrencode dig ethtool notify-send; do
-    if command -v "$opt" &>/dev/null; then
-        echo -e "  ${GREEN}✔ $opt (opcional) disponible.${RESET}"
-    else
-        echo -e "  ${YELLOW}ℹ $opt no encontrado (recomendado para QR / Speedtest / DNS).${RESET}"
-    fi
-done
-
-# 4. Directorio destino
-INSTALL_DIR="${HOME}/.local/bin"
-mkdir -p "$INSTALL_DIR"
+# thinkISP: instalación de usuario, sin cambiar paquetes ni la configuración de red.
+set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ "$(uname -s)" != Linux ]]; then
+    echo 'thinkISP requiere Linux con NetworkManager.' >&2
+    exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+    echo 'Falta Python 3.9 o posterior.' >&2
+    exit 1
+fi
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then
+    echo 'thinkISP requiere Python 3.9 o posterior.' >&2
+    exit 1
+fi
+THINKISP_PYTHON="$(python3 -c 'import sys; print(sys.executable)')"
+printf 'thinkISP · Instalación de usuario\nPython: %s\n' "$THINKISP_PYTHON"
 
-# Crear wrapper ejecutable
-cat << 'EOF' > "$INSTALL_DIR/thinkisp"
-#!/usr/bin/env bash
-THINKISP_DIR="%%PROJECT_DIR%%"
-export PYTHONPATH="$THINKISP_DIR:$PYTHONPATH"
-exec python3 "$THINKISP_DIR/main.py" "$@"
-EOF
+missing_tools=0
+for tool in nmcli iw ip; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'Falta herramienta requerida: %s\n' "$tool" >&2
+        missing_tools=1
+    fi
+done
+if [[ "$missing_tools" != 0 ]]; then
+    echo 'Instala las herramientas con el gestor de paquetes de tu distribución.' >&2
+    exit 1
+fi
+# Ejecutar el parser offline realmente: --help no prueba que se pueda crear el perfil.
+if ! nmcli --offline connection add type wifi con-name thinkISP ssid thinkISP \
+    802-11-wireless.mode ap ipv4.method shared \
+    802-11-wireless-security.key-mgmt wpa-psk >/dev/null; then
+    echo 'Se necesita nmcli con perfiles --offline (NetworkManager 1.40 o posterior).' >&2
+    exit 1
+fi
+for tool in tc curl qrencode dig ethtool notify-send nft pkexec; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        printf 'Opcional no disponible: %s (sólo afecta a las funciones que lo utilizan).\n' "$tool"
+    fi
+done
+if ! "$THINKISP_PYTHON" -c 'import curses' 2>/dev/null; then
+    echo 'El panel necesita el módulo curses de Python; los comandos CLI siguen disponibles.'
+fi
 
-sed -i "s|%%PROJECT_DIR%%|$PROJECT_DIR|g" "$INSTALL_DIR/thinkisp"
-chmod +x "$INSTALL_DIR/thinkisp"
-
-# Crear enlace simbólico 'isp'
+INSTALL_DIR="${THINKISP_BIN_DIR:-${HOME}/.local/bin}"
+DATA_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}"
+ZSH_DIR="${THINKISP_ZSH_DIR:-${HOME}/.zsh/completion}"
+for directory in "$INSTALL_DIR" "$DATA_DIR" "$CONFIG_DIR" "$ZSH_DIR"; do
+    if [[ "$directory" != /* ]]; then
+        echo 'Las rutas de instalación deben ser absolutas.' >&2
+        exit 1
+    fi
+done
+mkdir -p "$INSTALL_DIR"
+# %q evita que espacios, comillas, $, & o | en la ruta se conviertan en código.
+{
+    printf '#!/usr/bin/env bash\n'
+    printf 'THINKISP_DIR=%q\nTHINKISP_PYTHON=%q\n' "$PROJECT_DIR" "$THINKISP_PYTHON"
+    printf 'exec "$THINKISP_PYTHON" "$THINKISP_DIR/main.py" "$@"\n'
+} > "$INSTALL_DIR/thinkisp"
+chmod 755 "$INSTALL_DIR/thinkisp"
 ln -sf "$INSTALL_DIR/thinkisp" "$INSTALL_DIR/isp"
 
-echo -e "\n  ${GREEN}✔ Binarios instalados en:${RESET} ${BOLD}$INSTALL_DIR/thinkisp${RESET} y ${BOLD}$INSTALL_DIR/isp${RESET}"
+mkdir -p "$DATA_DIR/bash-completion/completions" "$CONFIG_DIR/fish/completions" "$ZSH_DIR" "$DATA_DIR/applications"
+cp "$PROJECT_DIR/extras/completions/thinkisp.bash" "$DATA_DIR/bash-completion/completions/thinkisp"
+ln -sf "$DATA_DIR/bash-completion/completions/thinkisp" "$DATA_DIR/bash-completion/completions/isp"
+cp "$PROJECT_DIR/extras/completions/thinkisp.fish" "$CONFIG_DIR/fish/completions/thinkisp.fish"
+ln -sf "$CONFIG_DIR/fish/completions/thinkisp.fish" "$CONFIG_DIR/fish/completions/isp.fish"
+cp "$PROJECT_DIR/extras/completions/_thinkisp" "$ZSH_DIR/_thinkisp"
 
-# 5. Comprobar si ~/.local/bin está en el PATH
+"$THINKISP_PYTHON" - "$PROJECT_DIR/extras/thinkisp.desktop" "$DATA_DIR/applications/thinkisp.desktop" "$INSTALL_DIR/thinkisp" <<'PY'
+from pathlib import Path
+import sys
+source, target, executable = sys.argv[1:]
+# Desktop Entry procesa primero escapes generales y luego la sintaxis de Exec.
+quoted = '"' + ''.join('\\' + c if c in '\\"`$' else c for c in executable) + '"'
+quoted = quoted.replace('\\', '\\\\').replace('%', '%%').replace('\n', '\\n').replace('\r', '\\r')
+lines = []
+for line in Path(source).read_text().splitlines():
+    if line.startswith('Exec='):
+        arguments = line[5:].split()[1:]
+        line = 'Exec=' + quoted + (' ' + ' '.join(arguments) if arguments else '')
+    lines.append(line)
+Path(target).write_text('\n'.join(lines) + '\n')
+PY
+printf '\nInstalado: %s/thinkisp\nLanzador: %s/applications/thinkisp.desktop\n' "$INSTALL_DIR" "$DATA_DIR"
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
-    echo -e "  ${YELLOW}⚠ Aviso: $INSTALL_DIR no parece estar en tu PATH.${RESET}"
-    echo -e "    Agrega la siguiente línea a tu ~/.bashrc o ~/.config/fish/config.fish:"
-    echo -e "    ${CYAN}export PATH=\"\$HOME/.local/bin:\$PATH\"${RESET}"
+    printf 'Añade %s al PATH de tu shell para usar thinkisp e isp.\n' "$INSTALL_DIR"
 fi
-
-# 6. Configuración de Autocompletado de Shell (Zsh, Bash, Fish)
-echo -e "\n  ${BOLD}Configuración de Autocompletado de Shell:${RESET}"
-
-# Zsh completion
-ZSH_SRC="$PROJECT_DIR/extras/completions/_thinkisp"
-if [ -f "$ZSH_SRC" ]; then
-    if [ -w "/usr/local/share/zsh/site-functions" ]; then
-        cp "$ZSH_SRC" "/usr/local/share/zsh/site-functions/_thinkisp"
-        chmod 644 "/usr/local/share/zsh/site-functions/_thinkisp"
-        echo -e "  ${GREEN}✔ Autocompletado Zsh instalado en:${RESET} /usr/local/share/zsh/site-functions/_thinkisp"
-    elif [ -w "/usr/share/zsh/site-functions" ]; then
-        cp "$ZSH_SRC" "/usr/share/zsh/site-functions/_thinkisp"
-        chmod 644 "/usr/share/zsh/site-functions/_thinkisp"
-        echo -e "  ${GREEN}✔ Autocompletado Zsh instalado en:${RESET} /usr/share/zsh/site-functions/_thinkisp"
-    else
-        ZSH_USER_DIR="${HOME}/.zsh/completion"
-        mkdir -p "$ZSH_USER_DIR"
-        cp "$ZSH_SRC" "$ZSH_USER_DIR/_thinkisp"
-        echo -e "  ${GREEN}✔ Autocompletado Zsh copiado a:${RESET} $ZSH_USER_DIR/_thinkisp"
-        echo -e "    ${YELLOW}ℹ Para activar Zsh:${RESET} Añade en tu ${CYAN}~/.zshrc${RESET} (antes de compinit):"
-        echo -e "      ${CYAN}fpath=(~/.zsh/completion \$fpath)${RESET}"
-        echo -e "      ${CYAN}autoload -Uz compinit && compinit${RESET}"
-        echo -e "    ${DIM}(O instala globalmente con: sudo cp $ZSH_SRC /usr/share/zsh/site-functions/_thinkisp)${RESET}"
-    fi
-fi
-
-# Bash completion
-BASH_USER_DIR="${HOME}/.local/share/bash-completion/completions"
-BASH_SRC="$PROJECT_DIR/extras/completions/thinkisp.bash"
-if [ -f "$BASH_SRC" ]; then
-    mkdir -p "$BASH_USER_DIR"
-    cp "$BASH_SRC" "$BASH_USER_DIR/thinkisp"
-    ln -sf "$BASH_USER_DIR/thinkisp" "$BASH_USER_DIR/isp"
-    echo -e "  ${GREEN}✔ Autocompletado Bash instalado en:${RESET} $BASH_USER_DIR/thinkisp"
-fi
-
-# Fish completion
-FISH_USER_DIR="${HOME}/.config/fish/completions"
-FISH_SRC="$PROJECT_DIR/extras/completions/thinkisp.fish"
-if [ -f "$FISH_SRC" ]; then
-    mkdir -p "$FISH_USER_DIR"
-    cp "$FISH_SRC" "$FISH_USER_DIR/thinkisp.fish"
-    ln -sf "$FISH_USER_DIR/thinkisp.fish" "$FISH_USER_DIR/isp.fish"
-    echo -e "  ${GREEN}✔ Autocompletado Fish instalado en:${RESET} $FISH_USER_DIR/thinkisp.fish"
-fi
-
-echo -e "\n${BOLD}${GREEN}✔ ¡Instalación completada exitosamente!${RESET}"
-echo -e "  ${DIM}Ejecuta ${BOLD}thinkisp${RESET}${DIM} para abrir el Dashboard interactivo (TUI).${RESET}"
-echo -e "  ${DIM}O usa comandos directos como ${BOLD}isp on${RESET}${DIM}, ${BOLD}isp boost${RESET}${DIM}, ${BOLD}isp top${RESET}${DIM}, ${BOLD}isp qr${RESET}.${RESET}\n"
+printf 'Zsh: añade %s al fpath antes de ejecutar compinit.\n' "$ZSH_DIR"
+echo 'La primera ejecución abre la configuración. Diagnóstico sin cambiar la red: thinkisp doctor'
+echo 'Conserva la carpeta del proyecto: los lanzadores ejecutan sus archivos directamente.'

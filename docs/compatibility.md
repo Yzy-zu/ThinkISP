@@ -1,0 +1,68 @@
+# Compatibilidad de thinkISP
+
+Revisión del 22 de octubre de 2026. Las pruebas descritas no activaron un hotspot ni cambiaron perfiles, DNS, reglas del equipo o el dominio regulatorio.
+
+## Requisitos por función
+
+| Función | Requisitos y límites |
+| --- | --- |
+| Plataforma | Linux. Windows y macOS se rechazan con un mensaje operativo. No se depende de una marca de PC ni de una arquitectura de CPU concreta. |
+| Python | 3.9 o posterior. Se ejecutó la suite con CPython 3.9.25, 3.10.22, 3.11.17, 3.12.15, 3.13.16 y 3.14.8 en Linux x86_64. |
+| Perfil y asistente | NetworkManager y `nmcli` con `--offline`, disponible desde 1.40; `iw` e `ip`. El asistente consulta las propiedades aceptadas por el parser instalado. |
+| Punto de acceso | Adaptador gestionado por NetworkManager que anuncie AP y canales autorizados para iniciar transmisión. DHCP/DNS compartido necesita el backend de la distribución, habitualmente dnsmasq. |
+| Banda, canal y ancho | Intersección de las capacidades de cada banda, restricciones de canal y opciones aceptadas por nmcli. Se reconocen frecuencias enteras y decimales de iw. DFS, firmware y soporte concreto de AP requieren prueba de activación. |
+| 6 GHz | Sólo se ofrece si la radio y nmcli admiten la banda. Se exige SAE/WPA3 y no se permite desactivar PMF. No se certificó una activación en 6 GHz. |
+| Potencia | Los límites se leen por canal, incluidos valores negativos en dBm. Aplicar cambios con iw necesita los permisos del sistema. |
+| Compartir Internet y DNS | Salida distinta de la interfaz del AP. Se respeta la métrica de las rutas y se admiten nombres personalizados, USB, bridges y bonds. IPv6 se usa como alternativa de detección; una salida exclusivamente IPv6 no garantiza servicio IPv4 a los clientes. VPN y reglas de encaminamiento específicas requieren validación propia. |
+| Bloqueo por MAC | `nft`, JSON y soporte del kernel para tabla netdev y hook ingress. Requiere CAP_NET_ADMIN o autorización PolicyKit; `pkexec` no es obligatorio para el AP básico. |
+| CAKE/TBF | Soporte del kernel y de NetworkManager para la cola elegida. `tc` comprueba la cola aplicada; una aceptación offline no confirma que el módulo del kernel esté disponible. |
+| Panel | Módulo curses de Python, entrada/salida TTY, locale UTF-8 y TERM válido. Tamaño mínimo 76×24. La selección también se distingue sin color. Sin TTY se usan comandos CLI. |
+| Diagnósticos y extras | `dig` para comparar DNS, `curl` para transferencia, `qrencode` para QR, `ethtool` para velocidad del enlace y `notify-send` para notificaciones. Su ausencia sólo afecta a la función correspondiente. |
+
+El requisito `--offline` está documentado por el [anuncio oficial de NetworkManager 1.40](https://networkmanager.dev/blog/networkmanager-1-40/). Las opciones dependen de la versión instalada: [propiedades Wi-Fi](https://www.networkmanager.dev/docs/api/latest/settings-802-11-wireless.html) y [manual de nmcli](https://networkmanager.pages.freedesktop.org/NetworkManager/NetworkManager/nmcli.html).
+
+## Comprobaciones ejecutadas
+
+| Comprobación | Resultado |
+| --- | --- |
+| Suite en seis versiones reales de Python, 3.9–3.14 | 220 pruebas aprobadas por versión. |
+| Curses real en pseudoterminal, en las seis versiones | Teclado, diálogos, resultado tardío de un trabajo, redimensionamiento a 80×24 y salida limpia aprobados. Datos de red simulados. |
+| Parser offline instalado: nmcli 1.58.1 | Perfiles AP seguros, SSID Unicode, canal, visibilidad, IPv4 compartido, DNS en perfil de salida, CAKE/TBF y propiedades opcionales aprobados. Ningún perfil real creado. |
+| Wheel, Python 3.14 | Construcción e instalación en venv temporal; módulos y entry points `thinkisp` e `isp` verificados sin descargar dependencias. |
+| Instalador | Rutas con espacios, comillas, `$`, `&`, `|` y `%`; lanzadores y completados en directorios de usuario temporales. Desktop Entry validado. |
+| Shell | Sintaxis de Bash y Fish verificada localmente. Zsh queda incluido en la matriz de CI. |
+| Distribución fuente | Tarball generado fuera del árbol de origen, checksum y ejecución de ayuda desde el contenido extraído. No se incluye el archivo dentro de sí mismo. |
+
+La CI queda configurada para Python 3.9–3.14 y parsers de NetworkManager de Debian bookworm/trixie y Ubuntu 24.04. **Configurar esa matriz no equivale a haberla ejecutado en GitHub en esta sesión**. Tampoco equivale a certificar el Wi-Fi real de esas distribuciones.
+
+## Diagnóstico del equipo consultado
+
+La consulta de sólo lectura encontró una interfaz con controlador `iwlwifi`, AP anunciado en 2.4 GHz, 13 canales permitidos y anchos aceptados de 20/40 MHz. Los canales de 5 GHz estaban restringidos para iniciar transmisión. Son observaciones del equipo y de su estado regulatorio durante esta revisión, no valores usados por el programa ni una limitación global de thinkISP.
+
+La [investigación específica de 5 GHz](5ghz-investigation.md) identifica la Intel 8265, confirma su conexión cliente de 5 GHz y explica la restricción LAR del stack instalado y la prueba temporal de un módulo modificado. Tras cargarlo, el diagnóstico real detectó ambas bandas y nueve canales de 5 GHz sin `no IR` ni DFS; la activación de un AP y asociación de clientes siguen pendientes. El módulo original permanece intacto y reiniciar revierte la carga experimental.
+
+El diagnóstico no encontró una salida distinta de la interfaz del AP y la lectura directa de nftables requería más permisos. Ambas condiciones se informan sin modificar la red ni solicitar autorización desde el diagnóstico.
+
+La salida de Internet se vuelve a detectar durante el uso. La selección del adaptador Wi-Fi se realiza al iniciar el proceso: si se sustituye por otro adaptador con diferente nombre, hay que volver a abrir el panel o seleccionar THINKISP_WLAN antes de ejecutarlo.
+
+No se comprobaron asociación con clientes, concesiones DHCP, navegación, rendimiento, AP de 5/6 GHz, múltiples radios simultáneas ni arquitecturas ARM/aarch64. El resultado indica qué requisitos y capacidades se pudieron consultar; la activación física continúa sin verificar.
+
+## Diagnóstico reproducible
+
+```bash
+python3 main.py doctor
+python3 main.py doctor --json
+python3 -m unittest discover -s tests
+python3 tests/integration/nmcli_offline.py
+python3 tests/integration/tui_roundtrip.py
+```
+
+`doctor` devuelve 1 si hay un requisito básico ausente, rechazado o sin confirmar. Las herramientas opcionales y la falta de TTY se notifican como avisos. La salida JSON mantiene `activation_tested: false` porque el diagnóstico no activa la radio. No consulta contraseñas ni escribe estado.
+
+Para comprobar el wheel sin red, instala antes las herramientas de desarrollo declaradas en `pyproject.toml` (setuptools y wheel) y ejecuta:
+
+```bash
+python3 tests/integration/package_roundtrip.py
+```
+
+Las pruebas de nftables con tráfico IPv4/IPv6 en redes virtuales tienen su procedimiento en el README; no forman parte del diagnóstico sobre las interfaces reales.

@@ -27,70 +27,36 @@ from thinkisp.core.dns import (
 
 
 class TestDnsProviderConfiguration(unittest.TestCase):
-    """Tests for setting and querying upstream DNS and AdBlock providers."""
+    @patch('thinkisp.core.dns.notify')
+    @patch('thinkisp.core.dns.configure_dns', return_value=(True, 'Cloudflare DNS aplicado'))
+    def test_set_upstream_dns_cloudflare(self, configure, notify):
+        self.assertTrue(set_upstream_dns('cloudflare')[0])
+        configure.assert_called_once_with('cloudflare')
+        notify.assert_called_once()
 
-    @patch("thinkisp.core.dns.notify")
-    @patch("thinkisp.core.dns.save_state")
-    @patch("thinkisp.core.dns.load_state", return_value={})
-    @patch("thinkisp.core.dns.apply_upstream_dns")
-    def test_set_upstream_dns_cloudflare(self, mock_apply, mock_load, mock_save, mock_notify):
-        success, msg = set_upstream_dns("cloudflare")
-        self.assertTrue(success)
-        self.assertIn("Cloudflare DNS", msg)
-        mock_apply.assert_called_once_with("1.1.1.1 1.0.0.1")
-        mock_save.assert_called_once_with({"dns": "Cloudflare DNS", "adblock": False})
-        mock_notify.assert_called_once()
+    @patch('thinkisp.core.dns.notify')
+    @patch('thinkisp.core.dns.configure_dns', return_value=(True, 'Restaurado'))
+    def test_auto_restores_instead_of_erasing_manual_dns(self, configure, notify):
+        self.assertTrue(set_dns_provider('auto')[0])
+        configure.assert_called_once_with(None)
 
-    @patch("thinkisp.core.dns.notify")
-    @patch("thinkisp.core.dns.save_state")
-    @patch("thinkisp.core.dns.load_state", return_value={})
-    @patch("thinkisp.core.dns.apply_upstream_dns")
-    def test_set_upstream_dns_adguard(self, mock_apply, mock_load, mock_save, mock_notify):
-        success, msg = set_upstream_dns("adguard")
-        self.assertTrue(success)
-        self.assertIn("AdGuard DNS", msg)
-        mock_apply.assert_called_once_with("94.140.14.14 94.140.15.15")
-        mock_save.assert_called_once_with({"dns": "AdGuard DNS (Anti-Anuncios)", "adblock": True})
+    @patch('thinkisp.core.dns.configure_dns')
+    def test_unknown_provider_does_not_mutate_state(self, configure):
+        self.assertFalse(set_dns_provider('unsupported_dns')[0])
+        configure.assert_not_called()
 
-    @patch("thinkisp.core.dns.notify")
-    @patch("thinkisp.core.dns.save_state")
-    @patch("thinkisp.core.dns.load_state", return_value={"dns": "Cloudflare DNS", "adblock": True})
-    @patch("thinkisp.core.dns.apply_upstream_dns")
-    def test_set_upstream_dns_auto(self, mock_apply, mock_load, mock_save, mock_notify):
-        success, msg = set_upstream_dns("auto")
-        self.assertTrue(success)
-        self.assertIn("automático", msg)
-        mock_apply.assert_called_once_with(None)
-        mock_save.assert_called_once_with({"dns": "Auto / DHCP", "adblock": False})
-
-    def test_set_upstream_dns_unknown(self):
-        success, msg = set_upstream_dns("unsupported_dns")
-        self.assertFalse(success)
-        self.assertIn("Proveedor desconocido", msg)
-
-    @patch("thinkisp.core.dns.load_state")
-    def test_get_current_dns(self, mock_load):
-        mock_load.return_value = {"dns": "Google Public DNS"}
-        self.assertEqual(get_current_dns(), "Google Public DNS")
-
-        mock_load.return_value = {}
-        self.assertEqual(get_current_dns(), "Auto / DHCP")
-
-    @patch("thinkisp.core.dns.set_dns_provider")
-    def test_set_adblock(self, mock_set_dns):
-        set_adblock(True)
-        mock_set_dns.assert_called_with("adguard")
-
-        set_adblock(False)
-        mock_set_dns.assert_called_with("auto")
-
-    @patch("thinkisp.core.dns.load_state")
-    def test_get_adblock_status(self, mock_load):
-        mock_load.return_value = {"adblock": True}
-        self.assertTrue(get_adblock_status())
-
-        mock_load.return_value = {}
+    @patch('thinkisp.core.dns.dns_status', return_value=('DNS real (pendiente)', False))
+    def test_status_is_observed_instead_of_global_cached_flags(self, status):
+        self.assertEqual(get_current_dns(), 'DNS real (pendiente)')
         self.assertFalse(get_adblock_status())
+
+    @patch('thinkisp.core.dns.notify')
+    @patch('thinkisp.core.dns.configure_dns', return_value=(True, 'configured'))
+    def test_adblock_toggle_preserves_the_previous_choice(self, configure, notify):
+        set_adblock(True)
+        configure.assert_called_with(adblock=True)
+        set_adblock(False)
+        configure.assert_called_with(adblock=False)
 
 
 class TestDnsBenchmark(unittest.TestCase):

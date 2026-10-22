@@ -119,7 +119,7 @@ class TestHotspotWatcherEvents(unittest.TestCase):
             tfile.unlink(missing_ok=True)
 
     @patch("thinkisp.core.watcher.notify")
-    @patch("thinkisp.core.watcher.run_cmd")
+    @patch("thinkisp.core.watcher.stop_hotspot", return_value=(True, None))
     def test_check_timers_countdown_expired(self, mock_run_cmd, mock_notify):
         with tempfile.NamedTemporaryFile("w+", delete=False) as f:
             tfile = Path(f.name)
@@ -136,14 +136,14 @@ class TestHotspotWatcherEvents(unittest.TestCase):
             self.assertEqual(res["action"], "shutdown_timer")
             expired_cb.assert_called_once()
             mock_notify.assert_called_once()
-            mock_run_cmd.assert_called_with(["nmcli", "connection", "down", HOTSPOT_CONN])
+            mock_run_cmd.assert_called_once_with()
             # Verify timer file was unlinked
             self.assertFalse(tfile.exists())
         finally:
             tfile.unlink(missing_ok=True)
 
     @patch("thinkisp.core.watcher.notify")
-    @patch("thinkisp.core.watcher.run_cmd")
+    @patch("thinkisp.core.watcher.stop_hotspot", return_value=(True, None))
     def test_check_timers_idle_timeout_expiration(self, mock_run_cmd, mock_notify):
         with tempfile.NamedTemporaryFile("w+", delete=False) as f:
             tfile = Path(f.name)
@@ -166,7 +166,7 @@ class TestHotspotWatcherEvents(unittest.TestCase):
             self.assertEqual(res2["action"], "shutdown_idle")
             idle_cb.assert_called_once()
             mock_notify.assert_called_once()
-            mock_run_cmd.assert_called_with(["nmcli", "connection", "down", HOTSPOT_CONN])
+            mock_run_cmd.assert_called_once_with()
             self.assertFalse(tfile.exists())
         finally:
             tfile.unlink(missing_ok=True)
@@ -249,12 +249,14 @@ class TestDaemonProcessManagement(unittest.TestCase):
                  patch("thinkisp.core.watcher.STATE_DIR", fake_state_dir):
                 start_daemon()
                 mock_popen.assert_called_once()
+                self.assertEqual(mock_popen.call_args.kwargs['env']['THINKISP_NO_AUTH'], '1')
                 self.assertTrue(fake_pid_file.exists())
                 self.assertEqual(fake_pid_file.read_text(), "99887")
 
     @patch("os.kill")
     @patch("subprocess.Popen")
-    def test_start_daemon_already_running(self, mock_popen, mock_kill):
+    @patch("pathlib.Path.read_bytes", return_value=b"python\0-m\0thinkisp.core.watcher\0")
+    def test_start_daemon_already_running(self, mock_cmdline, mock_popen, mock_kill):
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_pid_file = Path(tmpdir) / "daemon.pid"
             fake_pid_file.write_text("12345")
@@ -266,8 +268,9 @@ class TestDaemonProcessManagement(unittest.TestCase):
                 start_daemon()
                 mock_popen.assert_not_called()
 
+    @patch("pathlib.Path.read_bytes", return_value=b"python\0-m\0thinkisp.core.watcher\0")
     @patch("os.kill")
-    def test_stop_daemon(self, mock_kill):
+    def test_stop_daemon(self, mock_kill, mock_cmdline):
         with tempfile.TemporaryDirectory() as tmpdir:
             fake_pid_file = Path(tmpdir) / "daemon.pid"
             fake_pid_file.write_text("12345")
@@ -276,6 +279,20 @@ class TestDaemonProcessManagement(unittest.TestCase):
                 stop_daemon()
                 mock_kill.assert_called_once_with(12345, 15)
                 self.assertFalse(fake_pid_file.exists())
+
+    def test_transient_networkmanager_failure_does_not_trigger_cleanup(self):
+        from thinkisp.core.network import ThinkISPError
+        from thinkisp.core.watcher import run_daemon_loop
+        with tempfile.TemporaryDirectory() as directory, \
+             patch('thinkisp.core.watcher.DAEMON_PID_FILE', Path(directory) / 'daemon.pid'), \
+             patch('thinkisp.core.watcher.is_hotspot_active', side_effect=[ThinkISPError('NM timeout'), False]) as active, \
+             patch('thinkisp.core.watcher.stop_hotspot') as stop, \
+             patch('thinkisp.core.watcher.time.sleep') as sleep:
+            run_daemon_loop()
+        self.assertEqual(active.call_count, 2)
+        active.assert_called_with(check=True)
+        sleep.assert_called_once_with(2.0)
+        stop.assert_called_once_with()
 
 
 if __name__ == "__main__":

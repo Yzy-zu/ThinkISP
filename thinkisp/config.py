@@ -3,102 +3,119 @@ ThinkISP - Configuración Global y Constantes
 """
 
 import os
+import json
 from pathlib import Path
 import subprocess
+import socket
+from thinkisp.parsing import split_nmcli
 
 # Nombres y perfiles de conexión
-HOTSPOT_CONN = "sputnik-hotspot"
-DEFAULT_SSID = "sputnik"
-DEFAULT_PSK = "123456789z"
+PROJECT_NAME = "thinkISP"
+HOTSPOT_CONN = os.environ.get("THINKISP_PROFILE", PROJECT_NAME)
+
+
+def default_ssid():
+    """Nombre inicial por equipo; los perfiles existentes conservan su SSID."""
+    hostname = socket.gethostname().split(".")[0]
+    name = os.environ.get("THINKISP_SSID", f"{PROJECT_NAME}-{hostname}")
+    return name.encode("utf-8")[:32].decode("utf-8", errors="ignore")
+
+
+def _probe(args):
+    try:
+        return subprocess.check_output(
+            args, text=True, encoding='utf-8', errors='replace', stderr=subprocess.DEVNULL, timeout=5,
+            env={**os.environ, "LC_ALL": "C"},
+        ).strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
 
 
 def detect_wlan_iface():
     """Detecta automáticamente la interfaz Wi-Fi activa en cualquier distro Linux."""
     if os.environ.get("THINKISP_WLAN"):
         return os.environ["THINKISP_WLAN"]
-    # 1. Sysfs inspection
+    # Preferir un adaptador que NetworkManager pueda utilizar como AP.
+    devices = _probe(["nmcli", "-t", "-f", "DEVICE,TYPE", "device"])
+    wifi = [parts[0] for line in devices.splitlines()
+            for parts in [split_nmcli(line)] if len(parts) == 2 and parts[1] == 'wifi']
+    bound = _probe(["nmcli", "-g", "connection.interface-name", "connection", "show", "id", HOTSPOT_CONN])
+    if bound in wifi:
+        return bound
+    for iface in wifi:
+        if _probe(['nmcli', '-g', 'GENERAL.NM-MANAGED', 'device', 'show', iface]) == 'no':
+            continue
+        if _probe(["nmcli", "-g", "WIFI-PROPERTIES.AP", "device", "show", iface]) == "yes":
+            return iface
+    if wifi:
+        return wifi[0]
+    # Sysfs permite informar sobre el adaptador aunque NetworkManager no responda.
     sys_net = Path("/sys/class/net")
     if sys_net.exists():
         for p in sorted(sys_net.iterdir()):
             if (p / "wireless").exists() or (p / "phy80211").exists():
                 return p.name
-    # 2. NetworkManager query
-    try:
-        out = subprocess.check_output(
-            ["nmcli", "-t", "-f", "DEVICE,TYPE", "device"],
-            text=True, stderr=subprocess.DEVNULL
-        )
-        for line in out.splitlines():
-            dev, _, dtype = line.partition(":")
-            if dtype == "wifi":
-                return dev
-    except Exception:
-        pass
-    return "wlan0"
+    return None
 
 
-def detect_eth_iface(wlan_iface="wlan0"):
-    """Detecta automáticamente la interfaz Ethernet/Upstream en cualquier laptop o distro."""
+def detect_eth_iface(wlan_iface=None):
+    """Salida por ruta de menor métrica; admite USB, bridges y nombres personalizados."""
     if os.environ.get("THINKISP_ETH"):
         return os.environ["THINKISP_ETH"]
-    # 1. Default route interface (siempre que no sea wifi ni interfaz virtual)
-    try:
-        out = subprocess.check_output(
-            ["ip", "-4", "route", "show", "default"],
-            text=True, stderr=subprocess.DEVNULL
-        )
-        for line in out.splitlines():
+    # Preferir IPv4 para la conexión compartida IPv4; admitir también salida IPv6.
+    for family in ('-4', '-6'):
+        out = _probe(['ip', '-j', family, 'route', 'show', 'default'])
+        try:
+            routes = json.loads(out)
+            candidates = []
+            for route in routes:
+                if route.get('type', 'unicast') != 'unicast':
+                    continue
+                devices = [route] if route.get('dev') else route.get('nexthops', [])
+                for device in devices:
+                    iface = device.get('dev')
+                    if iface and iface not in (wlan_iface, 'lo'):
+                        candidates.append((int(route.get('metric', 0)), iface))
+            if candidates:
+                return min(candidates, key=lambda item: item[0])[1]
+        except (ValueError, TypeError, AttributeError):
+            pass
+        # iproute2 antiguo o sin JSON: seguir respetando las métricas.
+        candidates = []
+        for line in _probe(['ip', family, 'route', 'show', 'default']).splitlines():
             parts = line.split()
-            if "dev" in parts:
-                idx = parts.index("dev")
-                if idx + 1 < len(parts):
-                    cand = parts[idx + 1]
-                    if cand != wlan_iface and not cand.startswith(
-                        ("tailscale", "docker", "virbr", "veth", "lo", "tun", "tap", "br-")
-                    ):
-                        return cand
-    except Exception:
-        pass
-    # 2. NetworkManager Ethernet
-    try:
-        out = subprocess.check_output(
-            ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"],
-            text=True, stderr=subprocess.DEVNULL
-        )
-        for line in out.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 3 and parts[1] == "ethernet" and parts[2] == "connected" and parts[0] != wlan_iface:
+            if not parts or parts[0] != 'default' or 'dev' not in parts:
+                continue
+            try:
+                iface = parts[parts.index('dev') + 1]
+                metric = int(parts[parts.index('metric') + 1]) if 'metric' in parts else 0
+            except (IndexError, ValueError):
+                continue
+            if iface not in (wlan_iface, 'lo'):
+                candidates.append((metric, iface))
+        if candidates:
+            return min(candidates, key=lambda item: item[0])[1]
+    # Sin ruta: sólo considerar conexiones que NM confirme activas.
+    out = _probe(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "device"])
+    for line in out.splitlines():
+        parts = split_nmcli(line)
+        if len(parts) >= 3 and parts[0] not in (wlan_iface, 'lo'):
+            if parts[2] == 'connected' and parts[1] not in ('loopback', 'wifi-p2p'):
                 return parts[0]
-        for line in out.splitlines():
-            parts = line.split(":")
-            if len(parts) >= 2 and parts[1] == "ethernet" and parts[0] != wlan_iface:
-                return parts[0]
-    except Exception:
-        pass
-    # 3. Sysfs búsqueda de Ethernet física
-    sys_net = Path("/sys/class/net")
-    if sys_net.exists():
-        for p in sorted(sys_net.iterdir()):
-            name = p.name
-            if name != wlan_iface and not name.startswith(
-                ("lo", "tailscale", "docker", "virbr", "veth", "tun", "tap", "br-")
-            ):
-                if not (p / "wireless").exists() and not (p / "phy80211").exists():
-                    return name
-    return "eth0"
+    return None
 
 
 WLAN_IFACE = detect_wlan_iface()
 ETH_IFACE = detect_eth_iface(WLAN_IFACE)
 
 # Directorios de estado y datos
-STATE_DIR = Path(os.environ.get("XDG_STATE_HOME", str(Path.home() / ".local/state"))) / "isp"
+_state_home = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
+if not _state_home.is_absolute():
+    _state_home = Path.home() / '.local/state'
+STATE_DIR = _state_home / "isp"
 STATE_FILE = STATE_DIR / "state.json"
 TIMER_FILE = STATE_DIR / "timer.json"
 DAEMON_PID_FILE = STATE_DIR / "daemon.pid"
-
-# Rutas de binarios del sistema
-THINKPAD_MODE_BIN = Path.home() / ".local/bin/thinkpad-mode"
 
 # Proveedores de DNS
 DNS_PROVIDERS = {

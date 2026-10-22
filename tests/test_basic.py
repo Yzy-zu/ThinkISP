@@ -11,8 +11,9 @@ from thinkisp.core import dns, network, qos, watcher, wifi
 class TestThinkISPBasic(unittest.TestCase):
     def test_config_constants(self):
         """Verifica que las constantes críticas de configuración estén definidas."""
-        self.assertEqual(config.HOTSPOT_CONN, "sputnik-hotspot")
-        self.assertEqual(config.DEFAULT_SSID, "sputnik")
+        self.assertTrue(config.HOTSPOT_CONN)
+        self.assertTrue(1 <= len(config.default_ssid().encode("utf-8")) <= 32)
+        self.assertFalse(hasattr(config, "DEFAULT_PSK"))
         self.assertTrue(hasattr(config, "STATE_DIR"))
         self.assertTrue(hasattr(config, "DNS_PROVIDERS"))
 
