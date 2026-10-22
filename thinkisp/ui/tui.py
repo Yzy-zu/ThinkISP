@@ -11,6 +11,7 @@ import sys
 import shutil
 import copy
 import unicodedata
+from collections import deque
 from types import SimpleNamespace
 import time
 
@@ -68,6 +69,7 @@ from thinkisp.core.wifi import (
 from thinkisp.core.profile import hotspot_details
 from thinkisp.ui.setup import configure_hotspot, ensure_setup
 from thinkisp.ui.runtime import PanelTasks
+from thinkisp.ui import theme
 from thinkisp.core.dns_state import dns_status
 
 # Configurar locale para caracteres Unicode
@@ -90,6 +92,8 @@ MODAL_DNS = "dns"
 MODAL_LIMIT = "limit"
 MODAL_KICK = "kick"
 MODAL_HELP = "help"
+MODAL_BLOCKED = "blocked"
+MODAL_COMMANDS = "commands"
 
 # Definición de Botones del Dashboard
 BUTTON_DEFS = [
@@ -108,6 +112,32 @@ BUTTON_DEFS = [
     {"id": "quit", "label": "Salir", "hotkey": "Q", "hint": "Cerrar el panel; el punto de acceso sigue en su estado actual"},
 ]
 
+PAGES = [
+    ('Resumen', ('toggle', 'config', 'qr')),
+    ('Dispositivos', ('qr', 'access', 'blocked')),
+    ('Red', ('config', 'toggle', 'stealth', 'timer', 'qr', 'network_plan')),
+    ('Rendimiento', ('gaming', 'limit', 'speed', 'boost')),
+    ('DNS', ('dns', 'adblock', 'restore_dns')),
+]
+BUTTON_DEFS += [
+    {'id': 'network_plan', 'label': 'Conectividad', 'hotkey': 'N', 'hint': 'Plan por perfil: AP, entrada de Internet, repetidor y motor del portal (fase 1)'},
+    {'id': 'access', 'label': 'Ver dispositivo', 'hotkey': 'K', 'hint': 'Abrir detalles y controlar el acceso del dispositivo seleccionado'},
+    {'id': 'blocked', 'label': 'Bloqueados', 'hotkey': 'U', 'hint': 'Ver y permitir acceso a dispositivos bloqueados, aunque estén desconectados'},
+    {'id': 'restore_dns', 'label': 'Restaurar DNS', 'hotkey': 'E', 'hint': 'Recuperar la configuración DNS anterior de la salida'},
+]
+
+
+def page_actions(state):
+    by_id = {item['id']: item for item in BUTTON_DEFS}
+    return [by_id[name] for name in PAGES[state.page][1]]
+
+
+def select_page(state, index):
+    state.page = index % len(PAGES)
+    state.btn_index = 0
+    state.focus = FOCUS_CLIENTS if state.page == 1 else FOCUS_BUTTONS
+
+
 # El encabezado se construye con los datos del equipo en render_header().
 
 
@@ -117,6 +147,9 @@ BUTTON_DEFS = [
 class TUIState:
     def __init__(self):
         self.running = True
+        self.screen = None
+        self.page = 0
+        self.traffic_history = deque(maxlen=90)
         self.focus = FOCUS_BUTTONS
         self.btn_index = 0
         self.client_index = 0
@@ -168,7 +201,7 @@ class TUIState:
         self.poll_error = ""
         self.status_msg = "Consultando el estado de la red…"
         self.status_msg_time = time.time()
-        self.status_msg_color = curses.color_pair(4) if curses.has_colors() else 0
+        self.status_msg_color = theme.color(4) if curses.has_colors() else 0
 
         # Regiones clicables del ratón (y, x, w, h, tipo, id)
         self.mouse_regions = []
@@ -179,15 +212,14 @@ class TUIState:
         """Establece un mensaje de estado temporal en el footer."""
         self.status_msg = msg
         self.status_msg_time = time.time()
-        self.status_msg_color = curses.color_pair(color_pair_id) if curses.has_colors() else 0
+        self.status_msg_color = theme.color(color_pair_id) if curses.has_colors() else 0
 
 
 # =====================================================================
 # UTILIDADES DE PINTADO CURSES SEGURO
 # =====================================================================
 def focus_style():
-    colored = curses.has_colors() and getattr(curses, 'COLOR_PAIRS', 0) > 15
-    return (curses.color_pair(8) if colored else curses.A_REVERSE) | curses.A_BOLD
+    return theme.selected()
 
 
 def cell_width(text):
@@ -220,6 +252,8 @@ def safe_addstr(win, y, x, text, attr=0):
         max_y, max_x = win.getmaxyx()
         if y < 0 or y >= max_y or x < 0 or x >= max_x:
             return
+        if not attr & curses.A_COLOR and hasattr(win, 'inch'):
+            attr |= win.inch(y, x) & curses.A_COLOR
         available = max_x - x - (1 if y == max_y - 1 else 0)
         if available > 0:
             win.addstr(y, x, fit_text(text, available), attr)
@@ -228,55 +262,22 @@ def safe_addstr(win, y, x, text, attr=0):
 
 
 def draw_box(win, y, x, h, w, title="", attr=0, title_attr=0):
-    """Dibuja un marco discreto sin depender de un tipo de terminal concreto."""
     if h < 2 or w < 2:
         return
-    safe_addstr(win, y, x, "┌" + "─" * (w - 2) + "┐", attr)
+    for row in range(y, y + h):
+        safe_addstr(win, row, x, ' ' * w, theme.color(13))
+    edge = theme.color(17)
+    safe_addstr(win, y, x, '╭' + '─' * (w - 2) + '╮', edge)
     for row in range(y + 1, y + h - 1):
-        safe_addstr(win, row, x, "│", attr)
-        safe_addstr(win, row, x + w - 1, "│", attr)
-    safe_addstr(win, y + h - 1, x, "└" + "─" * (w - 2) + "┘", attr)
-
-    if title:
-        t_clean = f" {title} "
-        if len(t_clean) < w - 4:
-            safe_addstr(win, y, x + 2, t_clean, title_attr if title_attr else attr | curses.A_BOLD)
+        safe_addstr(win, row, x, '│', edge)
+        safe_addstr(win, row, x + w - 1, '│', edge)
+    safe_addstr(win, y + h - 1, x, '╰' + '─' * (w - 2) + '╯', edge)
+    if title and cell_width(title) < w - 6:
+        safe_addstr(win, y, x + 2, f' {title} ', title_attr or theme.color(5) | curses.A_BOLD)
 
 
-# =====================================================================
-# INICIALIZACIÓN DE PALETA DE COLORES
-# =====================================================================
 def init_colors():
-    """Inicializa pares de colores optimizados para terminales oscuros modernos."""
-    if not curses.has_colors():
-        return
-
-    curses.start_color()
-    bg = -1
-    try:
-        curses.use_default_colors()
-    except curses.error:
-        bg = curses.COLOR_BLACK
-
-    # Un acento cian; verde, ámbar y rojo comunican resultados y estados.
-    try:
-        curses.init_pair(1, curses.COLOR_GREEN, bg)
-        curses.init_pair(2, curses.COLOR_RED, bg)
-        curses.init_pair(3, curses.COLOR_YELLOW, bg)
-        curses.init_pair(4, curses.COLOR_CYAN, bg)
-        curses.init_pair(5, curses.COLOR_CYAN, bg)
-        curses.init_pair(6, curses.COLOR_CYAN, bg)
-        curses.init_pair(7, curses.COLOR_WHITE, bg)
-        curses.init_pair(8, curses.COLOR_BLACK, curses.COLOR_CYAN)
-        curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)
-        curses.init_pair(10, curses.COLOR_BLACK, curses.COLOR_GREEN)
-        curses.init_pair(11, curses.COLOR_BLACK, curses.COLOR_RED)
-        curses.init_pair(12, curses.COLOR_BLACK, curses.COLOR_YELLOW)
-        curses.init_pair(13, curses.COLOR_WHITE, bg)
-        curses.init_pair(14, curses.COLOR_WHITE, curses.COLOR_BLUE)
-        curses.init_pair(15, curses.COLOR_BLACK, curses.COLOR_WHITE)
-    except curses.error:
-        pass
+    theme.initialize()
 
 
 # =====================================================================
@@ -343,12 +344,17 @@ def update_telemetry(state):
             state.session_downloaded = 0
             state.session_uploaded = 0
 
-    # 5. Lista de clientes conectados (refrescar cada ciclo)
+    # Compare station counters by MAC; unknown/reset counters remain unmeasured.
+    previous_clients = {item['mac']: item for item in state.clients}
     if state.hotspot_active:
         state.clients = get_connected_clients(check=True)
         blocked = set(get_blocked_clients())
         for client in state.clients:
             client['blocked'] = client.get('mac') in blocked
+            previous = previous_clients.get(client['mac'], {})
+            for counter, rate in [('tx_bytes', 'down_bps'), ('rx_bytes', 'up_bps')]:
+                value, baseline = client.get(counter), previous.get(counter)
+                client[rate] = (value - baseline) / dt if value is not None and baseline is not None and value >= baseline else None
     else:
         state.clients = []
 
@@ -374,6 +380,9 @@ def make_poller(state):
 
 
 def apply_snapshot(state, snapshot):
+    if (snapshot.get('interface', state.interface) != state.interface or
+            (snapshot.get('hotspot_active') and state.hotspot_active is False)):
+        state.traffic_history.clear()
     selected = None
     if state.clients and state.client_index < len(state.clients):
         selected = state.clients[state.client_index].get('mac')
@@ -381,6 +390,14 @@ def apply_snapshot(state, snapshot):
         setattr(state, key, value)
     state.client_index = next((i for i, client in enumerate(state.clients) if client.get('mac') == selected),
                               min(state.client_index, max(0, len(state.clients) - 1)))
+    if 'instant_down_bps' in snapshot and 'instant_up_bps' in snapshot:
+        state.traffic_history.append((time.monotonic(), state.instant_down_bps, state.instant_up_bps))
+    if state.modal == MODAL_KICK:
+        target = state.modal_data.get('target_client', {})
+        latest = next((client for client in state.clients if client.get('mac') == target.get('mac')), None)
+        if latest is not None:
+            state.modal_data['target_client'] = dict(latest)
+        state.modal_data['associated'] = latest is not None
     state.last_refresh = time.monotonic()
     state.poll_error = ""
 
@@ -415,16 +432,16 @@ def drain_tasks(state):
 
 
 def render_header(win, state, max_y, max_x):
-    safe_addstr(win, 0, 2, "thinkISP", curses.color_pair(4) | curses.A_BOLD)
-    safe_addstr(win, 0, 13, fit_text(state.hostname, max_x - 40), curses.A_BOLD)
+    safe_addstr(win, 0, 2, "◈ thinkISP", theme.color(22) | curses.A_BOLD)
+    safe_addstr(win, 0, 15, fit_text(state.hostname, max_x - 44), theme.color(23))
     if state.poll_error:
         label, color = 'DATOS SIN ACTUALIZAR', 3
     elif state.last_refresh is None:
         label, color = 'CONSULTANDO', 3
     else:
         age = time.monotonic() - state.last_refresh
-        label, color = (f'SIN ACTUALIZAR {int(age)} s', 3) if age > 8 else ('EN VIVO', 4)
-    safe_addstr(win, 0, max_x - len(label) - 2, label, curses.color_pair(color))
+        label, color = (f'SIN ACTUALIZAR {int(age)} s', 3) if age > 8 else ('● EN VIVO', 1)
+    safe_addstr(win, 0, max_x - len(label) - 2, label, theme.color(color))
     safe_addstr(win, 1, 2, fit_text(f"{state.interface}  /  {state.band}", max_x - 4), curses.A_DIM)
     return 2
 
@@ -439,16 +456,16 @@ def render_status_bar(win, state, start_y, max_x):
     if state.hotspot_active is None:
         status, color = 'Estado sin confirmar', 3
     elif state.hotspot_active:
-        status, color = 'Punto de acceso activo', 1
+        status, color = '● Punto de acceso activo', 1
     else:
-        status, color = 'Punto de acceso apagado', 7
-    safe_addstr(win, start_y + 1, 3, fit_text(status, left_w), curses.color_pair(color) | curses.A_BOLD)
+        status, color = '○ Punto de acceso apagado', 16
+    safe_addstr(win, start_y + 1, 3, fit_text(status, left_w), theme.color(color) | curses.A_BOLD)
     safe_addstr(win, start_y + 1, right_x, fit_text(f"Red: {state.ssid}", right_w), curses.A_BOLD)
     upstream = state.ethernet
     link = f"{upstream.get('interface') or 'Sin datos'} · {upstream.get('speed') or 'Sin datos'}" if upstream.get('connected') else 'Sin conexión detectada'
     safe_addstr(win, start_y + 2, 3, fit_text(f"Puerta de enlace: {state.ip_gateway}", left_w))
-    safe_addstr(win, start_y + 2, right_x, fit_text(f"Salida: {link}", right_w), curses.color_pair(7 if upstream.get('connected') else 3))
-    safe_addstr(win, start_y + 3, 3, fit_text(f"DNS: {state.current_dns}", inner), curses.color_pair(7))
+    safe_addstr(win, start_y + 2, right_x, fit_text(f"Salida: {link}", right_w), theme.color(7 if upstream.get('connected') else 3))
+    safe_addstr(win, start_y + 3, 3, fit_text(f"DNS: {state.current_dns}", inner), theme.color(7))
     modes = f"CAKE {'activo' if state.gaming_mode else 'inactivo'}   ·   Filtro DNS {'activo' if state.adblock_mode else 'inactivo'}   ·   Red {'oculta' if state.stealth_mode else 'visible'}"
     if state.rate_limit:
         modes += f"   ·   Límite {state.rate_limit}"
@@ -476,7 +493,7 @@ def render_metrics_bar(win, state, start_y, max_x):
     for i, (label, value) in enumerate(metrics):
         x = 3 + i * (width + 1)
         safe_addstr(win, start_y + 1, x, fit_text(label, width), curses.A_DIM)
-        safe_addstr(win, start_y + 2, x, fit_text(value, width), curses.A_BOLD | curses.color_pair(4 if i else 7))
+        safe_addstr(win, start_y + 2, x, fit_text(value, width), curses.A_BOLD | theme.color((5, 4, 1)[i]))
     return start_y + 4
 
 
@@ -484,23 +501,41 @@ def button_columns(max_x):
     return max(3, min(5, (max_x - 4) // 18))
 
 
+def render_navigation(win, state, start_y, max_x):
+    state.mouse_regions = [r for r in state.mouse_regions if r.get('type') != 'page']
+    x = 2
+    for index, (name, _) in enumerate(PAGES):
+        text = f' F{index + 1} {name} '
+        attr = theme.color(19) | curses.A_BOLD if index == state.page else theme.color(23)
+        safe_addstr(win, start_y, x, text, attr)
+        state.mouse_regions.append({'type': 'page', 'rect': (start_y, x, cell_width(text), 1), 'index': index})
+        x += cell_width(text) + 1
+    return start_y + 2
+
+
 def render_buttons(win, state, start_y, max_x):
     state.mouse_regions = [r for r in state.mouse_regions if r.get('type') != 'button']
-    cols = button_columns(max_x)
+    actions = page_actions(state)
+    state.btn_index = min(state.btn_index, len(actions) - 1)
+    cols = min(button_columns(max_x), len(actions))
     btn_w = (max_x - 4) // cols
-    rows = (len(BUTTON_DEFS) + cols - 1) // cols
-    safe_addstr(win, start_y, 2, "ACCIONES", curses.A_DIM)
-    if state.focus == FOCUS_BUTTONS:
-        hint = BUTTON_DEFS[state.btn_index]['hint']
-        safe_addstr(win, start_y, 13, fit_text(hint, max_x - 16), curses.A_DIM)
-    for idx, definition in enumerate(BUTTON_DEFS):
+    rows = (len(actions) + cols - 1) // cols
+    safe_addstr(win, start_y, 2, 'ACCIONES', curses.A_DIM)
+    for idx, definition in enumerate(actions):
         label = definition['label']
         if definition['id'] == 'toggle':
             label = 'Apagar red' if state.hotspot_active else 'Encender red'
-        text = fit_text(f" [{definition['hotkey']}] {label}", btn_w - 1, pad=True)
+        elif definition['id'] == 'gaming':
+            label = 'CAKE activo' if state.gaming_mode else 'Activar CAKE'
+        elif definition['id'] == 'adblock':
+            label = 'Quitar filtro' if state.adblock_mode else 'Filtrar anuncios'
+        elif definition['id'] == 'stealth':
+            label = 'Mostrar red' if state.stealth_mode else 'Ocultar red'
+        prefix = ' › ' if state.focus == FOCUS_BUTTONS and idx == state.btn_index else '   '
+        text = fit_text(prefix + label, btn_w - 5, pad=True) + ' ' + definition['hotkey'] + '  '
         focused = state.focus == FOCUS_BUTTONS and state.btn_index == idx
-        attr = focus_style() if focused else curses.color_pair(7)
-        if state.busy_label and definition['id'] not in ('help', 'quit'):
+        attr = focus_style() if focused else theme.color(14)
+        if state.busy_label:
             attr = curses.A_DIM
         x, y = 2 + idx % cols * btn_w, start_y + 1 + idx // cols
         safe_addstr(win, y, x, text, attr)
@@ -508,12 +543,83 @@ def render_buttons(win, state, start_y, max_x):
     return start_y + rows + 1
 
 
+def sparkline(values, width):
+    values = list(values)[-max(1, width):]
+    if not values:
+        return 'Esperando muestras…'
+    peak = max(values)
+    levels = '▁▂▃▄▅▆▇█'
+    return ''.join(levels[min(7, int(max(0, value) / peak * 7))] if peak else levels[0] for value in values)
+
+
+def render_history(win, state, y, max_x):
+    draw_box(win, y, 1, 7, max_x - 2, 'TRÁFICO EN VIVO · ESCALA RELATIVA', curses.A_DIM)
+    samples = list(state.traffic_history)
+    seconds = samples[-1][0] - samples[0][0] if len(samples) > 1 else 0
+    for row, label, index in [(1, 'Descarga', 1), (3, 'Subida', 2)]:
+        values = [sample[index] for sample in samples]
+        safe_addstr(win, y + row, 3, f'{label}  {format_bytes(values[-1]) + "/s" if values else "—"}', curses.A_BOLD)
+        safe_addstr(win, y + row + 1, 3, sparkline(values, max_x - 7), theme.color(4 if index == 1 else 5))
+    safe_addstr(win, y + 5, 3, fit_text(f'Últimos {seconds:.0f} s · pico descarga {format_bytes(max((v[1] for v in samples), default=0))}/s', max_x - 6), curses.A_DIM)
+    return y + 7
+
+
+def render_info_card(win, y, max_x, title, lines):
+    draw_box(win, y, 1, len(lines) + 2, max_x - 2, title, curses.A_DIM)
+    for row, (label, value) in enumerate(lines, y + 1):
+        safe_addstr(win, row, 3, fit_text(label, 20), curses.A_DIM)
+        safe_addstr(win, row, 24, fit_text(value, max_x - 28), curses.A_BOLD)
+    return y + len(lines) + 2
+
+
+def render_page(win, state, max_y, max_x):
+    y = render_header(win, state, max_y, max_x)
+    y = render_navigation(win, state, y + 1, max_x)
+    if state.page == 0:
+        y = render_status_bar(win, state, y, max_x)
+        y = render_metrics_bar(win, state, y, max_x)
+        y = render_buttons(win, state, y, max_x)
+        render_clients_table(win, state, y, max_y, max_x)
+    elif state.page == 1:
+        y = render_buttons(win, state, y, max_x)
+        render_clients_table(win, state, y, max_y, max_x)
+    elif state.page == 2:
+        y = render_status_bar(win, state, y, max_x)
+        timer = state.timer_info or {}
+        y = render_info_card(win, y, max_x, 'RED Y ACCESO', [
+            ('Seguridad', state.security),
+            ('Visibilidad', 'Oculta' if state.stealth_mode else 'Visible'),
+            ('Apagado programado', timer.get('remaining_str') or (f"{timer['idle_mins']} min sin clientes" if timer.get('idle_mins') else 'Sin programación')),
+            ('Adaptador', state.interface),
+        ])
+        render_buttons(win, state, y + 1, max_x)
+    elif state.page == 3:
+        y = render_metrics_bar(win, state, y, max_x)
+        y = render_history(win, state, y, max_x)
+        y = render_info_card(win, y, max_x, 'CONTROL DE TRÁFICO', [
+            ('Cola CAKE', ('Activa' if state.hotspot_active else 'Guardada para encendido') if state.gaming_mode else 'Inactiva'),
+            ('Límite compartido', (str(state.rate_limit) + (' · guardado' if state.hotspot_active is False else '')) if state.rate_limit else 'Sin límite'),
+        ])
+        render_buttons(win, state, y, max_x)
+    else:
+        y = render_info_card(win, y, max_x, 'RESOLUCIÓN DNS', [
+            ('Proveedor actual', state.current_dns),
+            ('Filtro de anuncios', 'AdGuard DNS' if state.adblock_mode else 'Desactivado'),
+            ('Salida de Internet', state.ethernet.get('interface') if state.ethernet.get('connected') else 'Sin salida detectada'),
+        ])
+        safe_addstr(win, y + 1, 3, 'Compara proveedores o restaura los DNS anteriores.', curses.A_DIM)
+        safe_addstr(win, y + 2, 3, 'El filtro se aplica a las consultas DNS; no bloquea todo anuncio.', curses.A_DIM)
+        render_buttons(win, state, y + 4, max_x)
+    render_footer(win, state, max_y, max_x)
+    return y
+
+
 def client_columns(max_x):
     columns = [('hostname', 'DISPOSITIVO', 19), ('ip', 'DIRECCIÓN IP', 15), ('signal', 'SEÑAL', 9)]
     if max_x >= 96:
         columns.append(('mac', 'DIRECCIÓN MAC', 17))
     if max_x >= 116:
-        columns.append(('rate', 'ENLACE TX/RX', 15))
+        columns.append(('rate', 'TRÁFICO ↓ / ↑', 19))
     columns.append(('conn_time', 'CONECTADO', 12))
     return columns
 
@@ -525,7 +631,7 @@ def render_clients_table(win, state, start_y, max_y, max_x):
         return
     focused = state.focus == FOCUS_CLIENTS
     title = f"DISPOSITIVOS · {len(state.clients)}" if not state.poll_error else "DISPOSITIVOS · ÚLTIMA LECTURA"
-    draw_box(win, start_y, 1, height, max_x - 2, title, curses.color_pair(4) if focused else curses.A_DIM)
+    draw_box(win, start_y, 1, height, max_x - 2, title, theme.color(4) if focused else curses.A_DIM)
     columns = client_columns(max_x)
     x = 3
     for _, label, width in columns:
@@ -553,16 +659,19 @@ def render_clients_table(win, state, start_y, max_y, max_x):
             'ip': client.get('ip') or 'Sin dirección',
             'mac': client.get('mac') or 'Sin datos',
             'signal': f'{signal} dBm' if signal is not None else 'Sin datos',
-            'rate': '/'.join(f'{client[key]:.0f}' if client.get(key) is not None else '—' for key in ('tx_mbps', 'rx_mbps')) + ' Mbps',
+            'rate': ' / '.join(format_bytes(client[key]) + '/s' if client.get(key) is not None else '—' for key in ('down_bps', 'up_bps')),
             'conn_time': format_duration(client['conn_time']) if client.get('conn_time') is not None else '—',
         }
         y = start_y + 2 + index - offset
         selected = focused and state.client_index == index
         if selected:
-            safe_addstr(win, y, 2, ' ' * (max_x - 4), curses.color_pair(8))
+            safe_addstr(win, y, 2, ' ' * (max_x - 4), theme.color(8))
         x = 3
         for key, _, width in columns:
-            attr = focus_style() if selected else curses.color_pair(7)
+            attr = focus_style() if selected else theme.color(21 if index % 2 else 7)
+            if key == 'signal' and not selected:
+                strength = client.get('signal')
+                attr = theme.color(1 if strength is not None and strength >= -60 else 3 if strength is not None and strength >= -75 else 2 if strength is not None else 16)
             safe_addstr(win, y, x, fit_text(values[key], width, pad=True), attr)
             x += width + 1
         state.mouse_regions.append({'type': 'client', 'rect': (y, 2, max_x - 4, 1), 'index': index})
@@ -574,23 +683,61 @@ def render_clients_table(win, state, start_y, max_y, max_x):
 def render_footer(win, state, max_y, max_x):
     if state.busy_label:
         spinner = '|/−\\'[int(time.monotonic() * 5) % 4]
-        message, attr = f"{spinner} {state.busy_label}…" + (' Se cerrará al terminar.' if state.exit_requested else ''), curses.color_pair(4) | curses.A_BOLD
+        message, attr = f"{spinner} {state.busy_label}…" + (' Se cerrará al terminar.' if state.exit_requested else ''), theme.color(4) | curses.A_BOLD
     elif time.time() - state.status_msg_time < 8:
         message, attr = state.status_msg, state.status_msg_color
     elif state.poll_error:
-        message, attr = f'Actualización fallida: {state.poll_error}', curses.color_pair(3)
+        message, attr = f'Actualización fallida: {state.poll_error}', theme.color(3)
     elif state.focus == FOCUS_CLIENTS:
-        message, attr = '[Enter] Ver dispositivo y controlar su acceso', curses.color_pair(4)
+        message, attr = '[Enter] Ver dispositivo y controlar su acceso', theme.color(4)
     else:
-        message, attr = BUTTON_DEFS[state.btn_index]['hint'], curses.A_DIM
+        message, attr = page_actions(state)[state.btn_index]['hint'], curses.A_DIM
     safe_addstr(win, max_y - 2, 2, fit_text(message, max_x - 4), attr)
-    help_text = 'Tab Panel   Flechas Mover   Enter Elegir   ? Ayuda   Q Salir'
+    help_text = '/ Acciones   F1–F5 Vistas   Tab Foco   Enter Abrir   ? Ayuda   Q Salir'
     safe_addstr(win, max_y - 1, 2, fit_text(help_text, max_x - 4), curses.A_DIM)
 
 
 # =====================================================================
 # MODALES EMERGENTES (POP-UPS)
 # =====================================================================
+
+def command_matches(query):
+    def normalized(value):
+        return ''.join(c for c in unicodedata.normalize('NFKD', value.casefold()) if not unicodedata.combining(c))
+    words = normalized(query.strip().lstrip('/')).split()
+    options = [{'kind': 'page', 'id': i, 'label': name, 'hint': 'Ir a la vista ' + name, 'key': f'F{i + 1}'}
+               for i, (name, _) in enumerate(PAGES)]
+    options += [{'kind': 'action', 'id': item['id'], 'label': item['label'], 'hint': item['hint'], 'key': item['hotkey']}
+                for item in BUTTON_DEFS]
+    return [item for item in options if all(word in normalized(item['label'] + ' ' + item['hint']) for word in words)]
+
+
+def render_commands_modal(win, state, max_y, max_x):
+    data = state.modal_data
+    query = data.get('query', '')
+    options = command_matches(query)
+    width, height = min(82, max_x - 6), min(max(10, min(12, len(options)) + 8), max_y - 4)
+    y, x = modal_frame(win, max_y, max_x, height, width, 'BUSCAR ACCIONES', anchor_y=3)
+    modal_line(win, y + 2, x, width, fit_text(' › ' + query + '▏', width - 6, pad=True), theme.color(14) | curses.A_BOLD)
+    options = command_matches(query)
+    selected = min(data.get('selected_idx', 0), max(0, len(options) - 1))
+    size = height - 8
+    offset = max(0, selected - size + 1)
+    state.modal_regions = []
+    if not options:
+        modal_line(win, y + 5, x, width, 'Sin resultados. Prueba con red, DNS o límite.', theme.color(16))
+    for index in range(offset, min(len(options), offset + size)):
+        item = options[index]
+        row = y + 4 + index - offset
+        label = (' › ' if index == selected else '   ') + item['label']
+        style = focus_style() if index == selected else theme.color(7)
+        modal_line(win, row, x, width, fit_text(label, width - 6, pad=True), style)
+        safe_addstr(win, row, x + width - 8, fit_text(item['key'], 4), style)
+        state.modal_regions.append({'rect': (row, x + 3, width - 6, 1), 'field': 'selected_idx', 'value': index})
+    if options:
+        modal_line(win, y + height - 4, x, width, options[selected]['hint'], theme.color(16))
+    modal_line(win, y + height - 2, x, width, '↑↓ Elegir   Enter Abrir   Esc Cerrar', theme.color(4))
+
 
 def render_qr_modal(win, state, max_y, max_x):
     data = state.modal_data
@@ -606,27 +753,28 @@ def render_qr_modal(win, state, max_y, max_x):
         safe_addstr(win, y + 3, x + 4, 'Preparando código y credenciales…', curses.A_DIM)
         return
     if data.get('error'):
-        safe_addstr(win, y + 3, x + 4, fit_text(data['error'], width - 8), curses.color_pair(2))
+        safe_addstr(win, y + 3, x + 4, fit_text(data['error'], width - 8), theme.color(2))
         return
     row = y + 2
     for line in visible_lines:
         qr_x = x + (width - qr_width) // 2
-        safe_addstr(win, row, qr_x, line.ljust(qr_width), curses.color_pair(15))
+        safe_addstr(win, row, qr_x, line.ljust(qr_width), theme.color(15))
         row += 1
     if not visible_lines:
         note = data.get('note') or 'Amplía la terminal para ver el QR completo.'
-        safe_addstr(win, row, x + 4, fit_text(note, width - 8), curses.color_pair(3))
+        safe_addstr(win, row, x + 4, fit_text(note, width - 8), theme.color(3))
         row += 2
     safe_addstr(win, row, x + 4, fit_text(f"Red: {data.get('ssid', state.ssid)}", width - 8), curses.A_BOLD)
     safe_addstr(win, row + 1, x + 4, fit_text(f"Contraseña: {data.get('psk', '')}", width - 8), curses.A_BOLD)
     safe_addstr(win, row + 2, x + 4, fit_text(f"Seguridad: {data.get('security', state.security)}", width - 8), curses.A_DIM)
 
 
-def modal_frame(win, max_y, max_x, height, width, title):
-    y, x = max(1, (max_y - height) // 2), max(2, (max_x - width) // 2)
+def modal_frame(win, max_y, max_x, height, width, title, anchor_y=None):
+    y = max(1, (max_y - height) // 2) if anchor_y is None else min(anchor_y, max_y - height)
+    x = max(2, (max_x - width) // 2)
     for row in range(height):
-        safe_addstr(win, y + row, x, ' ' * width, curses.color_pair(13))
-    draw_box(win, y, x, height, width, title, curses.color_pair(4))
+        safe_addstr(win, y + row, x, ' ' * width, theme.color(13))
+    draw_box(win, y, x, height, width, title, theme.color(4))
     return y, x
 
 
@@ -641,30 +789,27 @@ def modal_controls(win, state, y, x, width, apply_text=None):
         state.modal_regions.append({'rect': (y, x + 3, cell_width(label), 1), 'key': 10})
     label = ' Esc Volver ' if apply_text else ' Esc Cerrar '
     bx = x + width - len(label) - 3
-    safe_addstr(win, y, bx, label, curses.color_pair(7) | curses.A_DIM)
+    safe_addstr(win, y, bx, label, theme.color(7) | curses.A_DIM)
     state.modal_regions.append({'rect': (y, bx, len(label), 1), 'key': 27})
 
 
 def render_timer_modal(win, state, max_y, max_x):
-    width, height = 64, 16
-    y, x = modal_frame(win, max_y, max_x, height, width, 'PROGRAMAR APAGADO')
+    width, height = 66, 19
+    y, x = modal_frame(win, max_y, max_x, height, width, 'APAGADO AUTOMÁTICO')
     timer = state.timer_info or {}
     current = timer.get('remaining_str') or (f"{timer['idle_mins']} min sin clientes" if timer.get('idle_mins') else 'Sin programación')
     modal_line(win, y + 2, x, width, f'Actual: {current}', curses.A_BOLD)
-    modal_line(win, y + 4, x, width, 'Selecciona una opción con las flechas izquierda / derecha.', curses.A_DIM)
-    labels = ['15 min', '30 min', '45 min', '1 hora', '2 horas', 'Inactividad 10 min', 'Desprogramar']
+    labels = ['Dentro de 15 minutos', 'Dentro de 30 minutos', 'Dentro de 45 minutos',
+              'Dentro de 1 hora', 'Dentro de 2 horas', 'Después de 10 minutos sin clientes', 'Quitar programación']
     selected = state.modal_data.get('preset_idx', 1)
-    for i, label in enumerate(labels):
-        row, col = divmod(i, 4)
-        px = x + 3 + (col * 14 if row == 0 else col * 19)
-        attr = focus_style() if i == selected else curses.color_pair(7)
-        span = 14 if row == 0 else 18
-        safe_addstr(win, y + 6 + row * 2, px, fit_text(label, span), attr)
-        state.modal_regions.append({'rect': (y + 6 + row * 2, px, span, 1), 'field': 'preset_idx', 'value': i})
-    modal_line(win, y + 10, x, width, 'O escribe: 45m, 1h20m o idle 10 (minutos sin clientes).', curses.A_DIM)
-    text = state.modal_data.get('custom_text', '')
-    modal_line(win, y + 11, x, width, f'Tiempo: {text}_', curses.color_pair(4) | curses.A_BOLD)
-    modal_controls(win, state, y + 14, x, width, 'Aplicar')
+    custom = state.modal_data.get('custom_text', '')
+    for index, label in enumerate(labels):
+        attr = focus_style() if index == selected and not custom else theme.color(7)
+        modal_line(win, y + 4 + index, x, width, fit_text(' ' + label, width - 6, pad=True), attr)
+        state.modal_regions.append({'rect': (y + 4 + index, x + 3, width - 6, 1), 'field': 'preset_idx', 'value': index})
+    modal_line(win, y + 12, x, width, 'Personalizado: ' + (custom + '▏' if custom else 'escribe 1h20m o idle 10'), theme.color(4))
+    modal_line(win, y + 14, x, width, '↑↓ Elegir · escribe para personalizar · Enter Aplicar', curses.A_DIM)
+    modal_controls(win, state, y + 17, x, width, 'Aplicar')
 
 
 def render_speedtest_modal(win, state, max_y, max_x):
@@ -674,7 +819,7 @@ def render_speedtest_modal(win, state, max_y, max_x):
     running = data.get('running', False)
     error = data.get('error')
     summary = 'Midiendo conexión y transferencia…' if running else ('La prueba terminó con errores.' if error else 'Prueba completada.')
-    modal_line(win, y + 2, x, width, summary, curses.color_pair(3 if running or error else 1) | curses.A_BOLD)
+    modal_line(win, y + 2, x, width, summary, theme.color(3 if running or error else 1) | curses.A_BOLD)
     modal_line(win, y + 4, x, width, 'Conexión HTTP', curses.A_DIM)
     modal_line(win, y + 5, x, width, f"{data['ping_ms']:.1f} ms" if data.get('ping_ms') is not None else '—', curses.A_BOLD)
     for row, label, key in [(7, 'Descarga', 'down_mbps'), (9, 'Subida', 'up_mbps')]:
@@ -682,10 +827,12 @@ def render_speedtest_modal(win, state, max_y, max_x):
         modal_line(win, y + row, x, width, f'{label:<18}{value}', curses.A_BOLD)
     modal_line(win, y + 11, x, width, 'Cloudflare · descarga 25 MB / subida 5 MB', curses.A_DIM)
     if error:
-        modal_line(win, y + 12, x, width, str(error), curses.color_pair(2))
+        modal_line(win, y + 12, x, width, str(error), theme.color(2))
     modal_controls(win, state, y + 14, x, width)
     if running:
         modal_line(win, y + 12, x, width, 'Puedes cerrar el diálogo mientras se mide.', curses.A_DIM)
+    elif not error:
+        modal_line(win, y + 12, x, width, 'R Repetir medición · consume otros 30 MB', curses.A_DIM)
 
 
 def render_dns_modal(win, state, max_y, max_x):
@@ -694,75 +841,107 @@ def render_dns_modal(win, state, max_y, max_x):
     modal_line(win, y + 2, x, width, 'PROVEEDOR                  SERVIDOR          RESPUESTA', curses.A_DIM)
     data = state.modal_data
     if data.get('running'):
-        modal_line(win, y + 5, x, width, 'Comparando respuesta de los proveedores…', curses.color_pair(4))
+        modal_line(win, y + 5, x, width, 'Comparando respuesta de los proveedores…', theme.color(4))
     elif data.get('error'):
-        modal_line(win, y + 5, x, width, str(data['error']), curses.color_pair(2))
+        modal_line(win, y + 5, x, width, str(data['error']), theme.color(2))
     else:
-        for i, item in enumerate(data.get('results', [])):
-            if i >= height - 7:
-                break
+        results = data.get('results', [])
+        offset = max(0, data.get('selected_idx', 0) - (height - 9) + 1)
+        for i in range(offset, min(len(results), offset + height - 9)):
+            item = results[i]
             delay = '—' if item['key'] == 'restore' else (f"{item['time']} ms" if item.get('time') is not None else 'Sin respuesta')
             row = f"{fit_text(item['name'], 26, pad=True)} {fit_text(item['ip'], 17, pad=True)} {delay}"
-            attr = focus_style() if i == data.get('selected_idx', 0) else curses.color_pair(7)
-            modal_line(win, y + 4 + i, x, width, row, attr)
-            state.modal_regions.append({'rect': (y + 4 + i, x + 3, width - 6, 1), 'field': 'selected_idx', 'value': i})
-    modal_line(win, y + 12, x, width, fit_text(f'Actual: {state.current_dns}', width - 6), curses.A_DIM)
+            attr = focus_style() if i == data.get('selected_idx', 0) else theme.color(7)
+            modal_line(win, y + 4 + i - offset, x, width, row, attr)
+            state.modal_regions.append({'rect': (y + 4 + i - offset, x + 3, width - 6, 1), 'field': 'selected_idx', 'value': i})
+    modal_line(win, y + 12, x, width, fit_text(f'Actual: {state.current_dns} · R Comparar otra vez', width - 6), curses.A_DIM)
     modal_controls(win, state, y + 14, x, width, None if data.get('running') or data.get('error') else 'Aplicar')
 
 
 def render_limit_modal(win, state, max_y, max_x):
-    width, height = 60, 14
-    y, x = modal_frame(win, max_y, max_x, height, width, 'LÍMITE DE ANCHO DE BANDA')
+    width, height = 66, 17
+    y, x = modal_frame(win, max_y, max_x, height, width, 'LÍMITE COMPARTIDO')
     modal_line(win, y + 2, x, width, f"Actual: {state.rate_limit or 'Sin límite'}", curses.A_BOLD)
-    modal_line(win, y + 4, x, width, 'Selecciona con las flechas izquierda / derecha.', curses.A_DIM)
     labels = ['5 Mbps', '15 Mbps', '30 Mbps', '50 Mbps', '100 Mbps', 'Sin límite']
-    for i, label in enumerate(labels):
-        row, col = divmod(i, 3)
-        attr = focus_style() if i == state.modal_data.get('preset_idx', 2) else curses.color_pair(7)
-        px = x + 4 + col * 17
-        safe_addstr(win, y + 6 + row * 2, px, label, attr)
-        state.modal_regions.append({'rect': (y + 6 + row * 2, px, len(label), 1), 'field': 'preset_idx', 'value': i})
-    modal_line(win, y + 10, x, width, 'Aplicar un límite sustituye las colas CAKE.', curses.A_DIM)
-    modal_controls(win, state, y + 12, x, width, 'Aplicar')
+    custom = state.modal_data.get('custom_text', '')
+    for index, label in enumerate(labels):
+        attr = focus_style() if index == state.modal_data.get('preset_idx', 2) and not custom else theme.color(7)
+        modal_line(win, y + 4 + index, x, width, fit_text(' ' + label, width - 6, pad=True), attr)
+        state.modal_regions.append({'rect': (y + 4 + index, x + 3, width - 6, 1), 'field': 'preset_idx', 'value': index})
+    modal_line(win, y + 11, x, width, 'Personalizado: ' + (custom + ' Mbps ▏' if custom else 'escribe una velocidad en Mbps'), theme.color(4))
+    modal_line(win, y + 12, x, width, state.modal_data.get('error') or '↑↓ Elegir · Enter Aplicar · Sustituye las colas CAKE.',
+               theme.color(2) if state.modal_data.get('error') else curses.A_DIM)
+    modal_controls(win, state, y + 15, x, width, 'Aplicar')
+
+
+def render_blocked_modal(win, state, max_y, max_x):
+    width, height = min(70, max_x - 4), min(18, max_y - 2)
+    y, x = modal_frame(win, max_y, max_x, height, width, 'ACCESO BLOQUEADO')
+    data = state.modal_data
+    if data.get('running'):
+        modal_line(win, y + 3, x, width, 'Consultando bloqueos guardados…', curses.A_DIM)
+    elif data.get('error'):
+        modal_line(win, y + 3, x, width, data['error'], theme.color(2))
+    else:
+        clients = data.get('clients', [])
+        selected = data.get('selected_idx', 0)
+        size = height - 7
+        offset = max(0, selected - size + 1)
+        if not clients:
+            modal_line(win, y + 3, x, width, 'No hay dispositivos bloqueados.', curses.A_DIM)
+        for index in range(offset, min(len(clients), offset + size)):
+            modal_line(win, y + 3 + index - offset, x, width, fit_text(clients[index], width - 6, pad=True),
+                       focus_style() if index == selected else theme.color(7))
+            state.modal_regions.append({'rect': (y + 3 + index - offset, x + 3, width - 6, 1), 'field': 'selected_idx', 'value': index})
+    modal_line(win, y + height - 3, x, width, 'R Actualizar · incluye clientes desconectados.', curses.A_DIM)
+    modal_controls(win, state, y + height - 2, x, width,
+                   'Permitir acceso' if data.get('clients') and not data.get('running') else None)
 
 
 def render_kick_modal(win, state, max_y, max_x):
-    width, height = 66, 16
-    y, x = modal_frame(win, max_y, max_x, height, width, 'DISPOSITIVO / CONTROL DE ACCESO')
+    width, height = 70, 18
+    y, x = modal_frame(win, max_y, max_x, height, width, 'DISPOSITIVO · DETALLES Y ACCESO')
     client = state.modal_data.get('target_client', {})
     for row, label, key in [(2, 'Nombre', 'hostname'), (4, 'Dirección IP', 'ip'), (5, 'Dirección MAC', 'mac')]:
-        modal_line(win, y + row, x, width, f"{label:<16}{client.get(key) or 'Sin datos'}", curses.A_BOLD if row == 2 else 0)
+        modal_line(win, y + row, x, width, f"{label:<17}{client.get(key) or 'Sin datos'}", curses.A_BOLD if row == 2 else 0)
     signal = client.get('signal')
-    modal_line(win, y + 6, x, width, f"Señal           {str(signal) + ' dBm' if signal is not None else 'Sin datos'}")
+    modal_line(win, y + 6, x, width, f"Señal            {str(signal) + ' dBm' if signal is not None else 'Sin datos'}")
+    duration = format_duration(client['conn_time']) if client.get('conn_time') is not None else 'Sin datos'
+    modal_line(win, y + 7, x, width, f'Conectado        {duration}')
+    link = ' / '.join(f'{client[key]:.0f}' if client.get(key) is not None else '—' for key in ('tx_mbps', 'rx_mbps'))
+    traffic = ' / '.join(format_bytes(client[key]) + '/s' if client.get(key) is not None else '—' for key in ('down_bps', 'up_bps'))
+    modal_line(win, y + 8, x, width, f'Enlace TX / RX   {link} Mbps')
+    modal_line(win, y + 9, x, width, f'Tráfico ↓ / ↑    {traffic}')
+    if state.modal_data.get('associated') is False:
+        modal_line(win, y + 3, x, width, 'Desconectado · última información recibida', curses.A_DIM)
     blocked = client.get('blocked', False)
-    modal_line(win, y + 8, x, width, 'Bloqueo configurado' if blocked else 'Sin bloqueo configurado', curses.color_pair(3 if blocked else 7))
-    modal_line(win, y + 10, x, width, 'El bloqueo impide su acceso al equipo e Internet.', curses.A_DIM)
-    modal_line(win, y + 11, x, width, 'Puede seguir asociado al Wi-Fi. La red no se reinicia.', curses.A_DIM)
-    action = 'Permitir acceso' if blocked else 'Bloquear acceso'
-    modal_controls(win, state, y + 14, x, width, action)
+    modal_line(win, y + 11, x, width, 'Acceso bloqueado' if blocked else 'Acceso permitido', theme.color(3 if blocked else 1) | curses.A_BOLD)
+    modal_line(win, y + 12, x, width, 'Bloquear impide acceso al equipo e Internet.', curses.A_DIM)
+    modal_line(win, y + 13, x, width, 'El dispositivo puede seguir asociado al Wi-Fi.', curses.A_DIM)
+    modal_controls(win, state, y + 16, x, width, 'Permitir acceso' if blocked else 'Bloquear acceso')
 
 
 def render_help_modal(win, state, max_y, max_x):
     width, height = min(74, max_x - 4), 22
     y, x = modal_frame(win, max_y, max_x, height, width, 'CONTROLES DEL PANEL')
     lines = [
-        ('Tab / Shift+Tab', 'Cambiar entre acciones y dispositivos'),
+        ('F1–F5 / [ ]', 'Cambiar de vista'),
+        ('Tab / Shift+Tab', 'Cambiar foco o recorrer acciones'),
         ('Flechas', 'Mover la selección'),
         ('Enter', 'Abrir acción o ver dispositivo'),
-        ('RePág / AvPág', 'Recorrer dispositivos por páginas'),
-        ('Inicio / Fin', 'Primer o último dispositivo'),
+        ('/ / Ctrl+P', 'Buscar cualquier acción por nombre'),
         ('O', 'Encender o apagar el punto de acceso'),
-        ('C', 'Configurar red y parámetros de la tarjeta'),
+        ('C / N', 'Configurar red / plan de conectividad'),
         ('R', 'Ver credenciales y código QR'),
         ('T', 'Programar apagado'),
-        ('G / L', 'Colas CAKE / límite de ancho de banda'),
-        ('D / A', 'Servidores DNS / filtro AdGuard DNS'),
+        ('G / L', 'Colas CAKE / límite (admite valor propio)'),
+        ('D / A / E', 'Comparar DNS / filtro / restaurar DNS'),
         ('S', 'Ocultar o mostrar la red'),
         ('P / B', 'Prueba de conexión / optimizar Wi-Fi'),
-        ('K', 'Controlar acceso del dispositivo seleccionado'),
+        ('K / U', 'Ver dispositivo / lista de bloqueados'),
         ('Esc', 'Cerrar diálogo sin aplicar cambios'),
         ('Q', 'Salir del panel; conserva el estado de la red'),
-        ('Ratón', 'Clic para elegir una acción o dispositivo'),
+        ('Ratón', 'Clic en pestañas, acciones y dispositivos'),
     ]
     for i, (key, explanation) in enumerate(lines):
         modal_line(win, y + 2 + i, x, width, f'{key:<18}{explanation}', curses.A_DIM if i % 2 else 0)
@@ -889,19 +1068,48 @@ def _execute_button_action(btn_id, state):
         modal_task(state, MODAL_SPEEDTEST, 'Midiendo conexión y transferencia', measure)
     elif btn_id == 'qr':
         modal_task(state, MODAL_QR, 'Preparando conexión QR', prepare_qr)
+    elif btn_id == 'access':
+        if state.clients and 0 <= state.client_index < len(state.clients):
+            state.modal = MODAL_KICK
+            state.modal_data = {'target_client': dict(state.clients[state.client_index])}
+        else:
+            state.set_status('No hay dispositivos conectados para consultar.', 3)
+    elif btn_id == 'blocked':
+        modal_task(state, MODAL_BLOCKED, 'Consultando bloqueos',
+                   lambda: {'clients': get_blocked_clients(), 'selected_idx': 0})
+    elif btn_id == 'restore_dns':
+        submit_action(state, 'Restaurando DNS anterior', lambda: checked_result(set_dns_provider('restore')))
+    elif btn_id == 'network_plan':
+        from thinkisp.ui.connectivity import configure_connectivity
+        if state.tasks:
+            state.tasks.pause(True)
+        try:
+            saved = configure_connectivity(screen=state.screen)
+            state.set_status('Plan guardado; no aplicado a la red.' if saved else 'Plan sin cambios.', 4)
+        finally:
+            if state.screen is not None:
+                state.screen.timeout(100)
+                state.screen.keypad(True)
+                state.screen.clear()
+                init_colors()
+                theme.background(state.screen)
+            if state.tasks:
+                state.tasks.pause(False)
     elif btn_id == 'config':
         if state.tasks:
             state.tasks.pause(True)
-        curses.def_prog_mode()
-        curses.endwin()
         try:
-            configure_hotspot()
+            configure_hotspot(screen=state.screen)
             state.set_status('Configuración guardada.', 1)
         except (KeyboardInterrupt, EOFError):
             state.set_status('Configuración cancelada.', 3)
         finally:
-            curses.reset_prog_mode()
-            curses.doupdate()
+            if state.screen is not None:
+                state.screen.timeout(100)
+                state.screen.keypad(True)
+                state.screen.clear()
+                init_colors()
+                theme.background(state.screen)
             if state.tasks:
                 state.tasks.pause(False)
 
@@ -916,7 +1124,7 @@ def execute_button_action(btn_id, state):
 # =====================================================================
 # MANEJADOR DE ENTRADA POR RATÓN
 # =====================================================================
-def handle_mouse(my, mx, state):
+def handle_mouse(my, mx, state, activate=False):
     """Procesa eventos de clic del ratón sobre botones o filas de clientes."""
     if state.modal != MODAL_NONE:
         for region in state.modal_regions:
@@ -926,6 +1134,10 @@ def handle_mouse(my, mx, state):
                     handle_keypress(region['key'], state, state.viewport_width)
                 else:
                     state.modal_data[region['field']] = region['value']
+                    if region['field'] == 'preset_idx':
+                        state.modal_data['custom_text'] = ''
+                    if activate and state.modal == MODAL_COMMANDS:
+                        handle_keypress(10, state, state.viewport_width)
                 break
         return
 
@@ -933,6 +1145,9 @@ def handle_mouse(my, mx, state):
         y, x, w, h = reg["rect"]
         if y <= my < y + h and x <= mx < x + w:
             rtype = reg.get("type")
+            if rtype == "page":
+                select_page(state, reg["index"])
+                return
             if rtype == "button":
                 state.focus = FOCUS_BUTTONS
                 state.btn_index = reg["index"]
@@ -941,6 +1156,9 @@ def handle_mouse(my, mx, state):
             elif rtype == "client":
                 state.focus = FOCUS_CLIENTS
                 state.client_index = reg["index"]
+                if activate:
+                    state.modal = MODAL_KICK
+                    state.modal_data = {"target_client": dict(state.clients[state.client_index])}
                 return
 
 
@@ -951,8 +1169,39 @@ def handle_keypress(ch, state, max_x):
     """Procesa la entrada del teclado considerando foco y modales."""
     # 1. Manejo cuando hay un modal abierto
     if state.modal != MODAL_NONE:
-        if ch in (27, ord('q'), ord('Q')):  # Esc o Q
+        if ch == 27 or (state.modal != MODAL_COMMANDS and ch in (ord('q'), ord('Q'))):
             close_modal(state)
+            return
+
+        if state.modal == MODAL_COMMANDS:
+            options = command_matches(state.modal_data.get('query', ''))
+            selected = state.modal_data.get('selected_idx', 0)
+            if ch == curses.KEY_UP:
+                state.modal_data['selected_idx'] = max(0, selected - 1)
+            elif ch == curses.KEY_DOWN:
+                state.modal_data['selected_idx'] = min(max(0, len(options) - 1), selected + 1)
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                state.modal_data['query'] = state.modal_data.get('query', '')[:-1]
+                state.modal_data['selected_idx'] = 0
+            elif ch == 21:
+                state.modal_data.update(query='', selected_idx=0)
+            elif ch in (10, 13) and options:
+                chosen = options[min(selected, len(options) - 1)]
+                close_modal(state)
+                if chosen['kind'] == 'page':
+                    select_page(state, chosen['id'])
+                else:
+                    execute_button_action(chosen['id'], state)
+            elif 32 <= ch <= 126:
+                state.modal_data['query'] = (state.modal_data.get('query', '') + chr(ch))[:80]
+                state.modal_data['selected_idx'] = 0
+            return
+
+        if ch in (ord('r'), ord('R')) and state.modal in (MODAL_DNS, MODAL_SPEEDTEST, MODAL_BLOCKED):
+            action = {MODAL_DNS: 'dns', MODAL_SPEEDTEST: 'speed', MODAL_BLOCKED: 'blocked'}[state.modal]
+            if not state.busy_label:
+                close_modal(state)
+                execute_button_action(action, state)
             return
 
         if state.modal in (MODAL_QR, MODAL_HELP):
@@ -964,9 +1213,11 @@ def handle_keypress(ch, state, max_x):
             presets = ["15m", "30m", "45m", "1h", "2h", "idle 10", "cancel"]
             cur_p = state.modal_data.get("preset_idx", 0)
 
-            if ch == curses.KEY_LEFT:
+            if ch in (curses.KEY_LEFT, curses.KEY_UP):
+                state.modal_data["custom_text"] = ""
                 state.modal_data["preset_idx"] = max(0, cur_p - 1)
-            elif ch == curses.KEY_RIGHT:
+            elif ch in (curses.KEY_RIGHT, curses.KEY_DOWN):
+                state.modal_data["custom_text"] = ""
                 state.modal_data["preset_idx"] = min(len(presets) - 1, cur_p + 1)
             elif ch in (curses.KEY_BACKSPACE, 127, 8):
                 cust = state.modal_data.get("custom_text", "")
@@ -1000,16 +1251,46 @@ def handle_keypress(ch, state, max_x):
             return
 
         elif state.modal == MODAL_LIMIT:
-            presets = ["5", "15", "30", "50", "100", "reset"]
-            cur_p = state.modal_data.get("preset_idx", 0)
-            if ch == curses.KEY_LEFT:
-                state.modal_data["preset_idx"] = max(0, cur_p - 1)
-            elif ch == curses.KEY_RIGHT:
-                state.modal_data["preset_idx"] = min(len(presets) - 1, cur_p + 1)
-            elif ch in (10, 13):  # Enter
-                value = presets[cur_p]
+            presets = ['5', '15', '30', '50', '100', 'reset']
+            selected = state.modal_data.get('preset_idx', 2)
+            if ch in (curses.KEY_LEFT, curses.KEY_UP):
+                state.modal_data.update(preset_idx=max(0, selected - 1), custom_text='')
+            elif ch in (curses.KEY_RIGHT, curses.KEY_DOWN):
+                state.modal_data.update(preset_idx=min(len(presets) - 1, selected + 1), custom_text='')
+            elif ch in (curses.KEY_BACKSPACE, 127, 8):
+                state.modal_data['custom_text'] = state.modal_data.get('custom_text', '')[:-1]
+            elif ch in range(ord('0'), ord('9') + 1) or ch == ord('.'):
+                text = state.modal_data.get('custom_text', '')
+                if len(text) < 12:
+                    state.modal_data['custom_text'] = text + chr(ch)
+                state.modal_data.pop('error', None)
+            elif ch in (10, 13):
+                value = state.modal_data.get('custom_text', '') or presets[selected]
+                if value != 'reset':
+                    import math
+                    try:
+                        rate = float(value)
+                    except ValueError:
+                        rate = 0
+                    if not math.isfinite(rate) or rate <= 0:
+                        state.modal_data['error'] = 'Escribe una velocidad mayor que cero.'
+                        state.set_status('Escribe una velocidad mayor que cero.', 3)
+                        return
                 operation = clear_rate_limit if value == 'reset' else lambda: set_rate_limit(value)
                 if submit_action(state, 'Configurando límite', lambda: checked_result(operation())):
+                    close_modal(state)
+            return
+
+        elif state.modal == MODAL_BLOCKED:
+            clients = state.modal_data.get('clients', [])
+            selected = state.modal_data.get('selected_idx', 0)
+            if ch == curses.KEY_UP:
+                state.modal_data['selected_idx'] = max(0, selected - 1)
+            elif ch == curses.KEY_DOWN:
+                state.modal_data['selected_idx'] = min(max(0, len(clients) - 1), selected + 1)
+            elif ch in (10, 13) and clients and not state.modal_data.get('running'):
+                mac = clients[selected]
+                if submit_action(state, 'Permitiendo acceso del dispositivo', lambda: checked_result(unkick_client(mac))):
                     close_modal(state)
             return
 
@@ -1044,9 +1325,23 @@ def handle_keypress(ch, state, max_x):
                     close_modal(state)
             return
 
+    if ch in (ord('/'), 16):
+        state.modal, state.modal_data = MODAL_COMMANDS, {'query': '', 'selected_idx': 0}
+        return
+
+    if ch in range(curses.KEY_F1, curses.KEY_F5 + 1):
+        select_page(state, ch - curses.KEY_F1)
+        return
+    if ch in (ord('['), ord(']')):
+        select_page(state, state.page + (1 if ch == ord(']') else -1))
+        return
+
     # 2. Navegación y Atajos Globales (sin modal activo)
     # Atajos de una sola letra
     key_map = {
+        ord('n'): 'network_plan', ord('N'): 'network_plan',
+        ord('u'): 'blocked', ord('U'): 'blocked',
+        ord('e'): 'restore_dns', ord('E'): 'restore_dns',
         ord('c'): "config", ord('C'): "config",
         ord('b'): "boost", ord('B'): "boost",
         ord('g'): "gaming", ord('G'): "gaming",
@@ -1076,18 +1371,19 @@ def handle_keypress(ch, state, max_x):
         return
 
     # Tecla Tab (cambiar foco entre Botones y Clientes)
-    if ch in (9, curses.KEY_BTAB):  # Tab o Shift-Tab
+    if ch in (9, curses.KEY_BTAB) and state.page in (0, 1):  # Tab o Shift-Tab
         state.focus = FOCUS_CLIENTS if state.focus == FOCUS_BUTTONS else FOCUS_BUTTONS
         return
 
     # Flechas de navegación según panel enfocado
     if state.focus == FOCUS_BUTTONS:
-        cols = button_columns(max_x)
-        total_btns = len(BUTTON_DEFS)
+        actions = page_actions(state)
+        cols = min(button_columns(max_x), len(actions))
+        total_btns = len(actions)
 
-        if ch == curses.KEY_LEFT:
+        if ch in (curses.KEY_LEFT, curses.KEY_BTAB):
             state.btn_index = (state.btn_index - 1) % total_btns
-        elif ch == curses.KEY_RIGHT:
+        elif ch in (curses.KEY_RIGHT, 9):
             state.btn_index = (state.btn_index + 1) % total_btns
         elif ch == curses.KEY_UP:
             if state.btn_index >= cols:
@@ -1097,10 +1393,10 @@ def handle_keypress(ch, state, max_x):
                 state.btn_index += cols
             else:
                 # Saltar al panel de clientes
-                if state.clients:
+                if state.clients and state.page in (0, 1):
                     state.focus = FOCUS_CLIENTS
         elif ch in (10, 13, 32):  # Enter o Espacio
-            execute_button_action(BUTTON_DEFS[state.btn_index]["id"], state)
+            execute_button_action(actions[state.btn_index]["id"], state)
 
     elif state.focus == FOCUS_CLIENTS:
         total_c = len(state.clients)
@@ -1144,7 +1440,9 @@ def run_tui(stdscr):
     except (AttributeError, curses.error):
         pass
     init_colors()
+    theme.background(stdscr)
     state = TUIState()
+    state.screen = stdscr
     state.tasks = PanelTasks(make_poller(state))
     state.tasks.start()
     try:
@@ -1159,21 +1457,17 @@ def run_tui(stdscr):
             stdscr.erase()
             if max_y < 24 or max_x < 76:
                 safe_addstr(stdscr, 1, 2, 'thinkISP', curses.A_BOLD)
-                safe_addstr(stdscr, 3, 2, 'Amplía la terminal a 76 columnas y 24 filas.', curses.color_pair(3))
+                safe_addstr(stdscr, 3, 2, 'Amplía la terminal a 76 columnas y 24 filas.', theme.color(3))
                 safe_addstr(stdscr, 5, 2, f'Tamaño actual: {max_x} × {max_y} · Q Salir', curses.A_DIM)
                 render_footer(stdscr, state, max_y, max_x)
             else:
-                y = render_header(stdscr, state, max_y, max_x)
-                y = render_status_bar(stdscr, state, y, max_x)
-                y = render_metrics_bar(stdscr, state, y, max_x)
-                y = render_buttons(stdscr, state, y, max_x)
-                render_clients_table(stdscr, state, y, max_y, max_x)
-                render_footer(stdscr, state, max_y, max_x)
+                render_page(stdscr, state, max_y, max_x)
                 renderers = {
                     MODAL_QR: render_qr_modal, MODAL_TIMER: render_timer_modal,
                     MODAL_SPEEDTEST: render_speedtest_modal, MODAL_DNS: render_dns_modal,
                     MODAL_LIMIT: render_limit_modal, MODAL_KICK: render_kick_modal,
-                    MODAL_HELP: render_help_modal,
+                    MODAL_HELP: render_help_modal, MODAL_BLOCKED: render_blocked_modal,
+                    MODAL_COMMANDS: render_commands_modal,
                 }
                 if state.modal in renderers:
                     renderers[state.modal](stdscr, state, max_y, max_x)
@@ -1196,7 +1490,11 @@ def run_tui(stdscr):
                 if ch == curses.KEY_MOUSE:
                     _, mx, my, _, flags = curses.getmouse()
                     if flags & (curses.BUTTON1_CLICKED | curses.BUTTON1_DOUBLE_CLICKED):
-                        handle_mouse(my, mx, state)
+                        handle_mouse(my, mx, state, activate=bool(flags & curses.BUTTON1_DOUBLE_CLICKED))
+                    elif flags & curses.BUTTON4_PRESSED:
+                        handle_keypress(curses.KEY_UP, state, max_x)
+                    elif flags & getattr(curses, "BUTTON5_PRESSED", 0):
+                        handle_keypress(curses.KEY_DOWN, state, max_x)
                 else:
                     handle_keypress(ch, state, max_x)
             except (ThinkISPError, OSError, curses.error) as exc:
@@ -1217,9 +1515,11 @@ def launch_tui():
         raise ThinkISPError("La terminal no anuncia soporte curses (TERM). Usa los comandos CLI o una terminal compatible.")
     if locale.nl_langinfo(locale.CODESET).lower().replace('-', '') != 'utf8':
         raise ThinkISPError("El panel necesita una configuración regional UTF-8. Usa un locale UTF-8 instalado en el sistema o los comandos CLI.")
-    ensure_setup()
+    def dashboard(screen):
+        ensure_setup(screen=screen)
+        run_tui(screen)
     try:
-        curses.wrapper(run_tui)
+        curses.wrapper(dashboard)
     except curses.error as exc:
         raise ThinkISPError(f"No se pudo iniciar el panel con esta terminal: {exc}. Usa 'thinkisp status'.") from exc
     except KeyboardInterrupt:

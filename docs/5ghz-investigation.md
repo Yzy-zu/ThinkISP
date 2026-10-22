@@ -1,6 +1,6 @@
 # Investigación del AP de 5 GHz
 
-Investigación del 22 de octubre de 2026. La primera consulta fue de sólo lectura. Después se compiló y cargó temporalmente un módulo experimental con autorización del usuario; el resultado se documenta más abajo. No se activó un AP.
+Investigación del 22 de octubre de 2026. La primera consulta fue de sólo lectura. Después se compiló y cargó temporalmente un módulo experimental con autorización del usuario; el resultado se documenta más abajo. Después se intentó activar un AP de 5 GHz; el firmware falló y la conexión cliente fue restaurada automáticamente.
 
 ## Qué se confirmó en el equipo
 
@@ -37,8 +37,7 @@ Además, para compartir una conexión Wi-Fi de entrada mediante una segunda inte
 
 ## Conclusión verificable
 
-La radio sí opera en 5 GHz. Con el controlador y las restricciones actuales, thinkISP no dispone de un canal autorizado para iniciar AP de 5 GHz. Existe una vía experimental con un controlador modificado que merece evaluación separada; no se comprobó su compilación ni su activación en este equipo. El modo AP de 2.4 GHz permanece anunciado como disponible, también pendiente de una prueba de asociación y navegación.
-
+La radio opera como cliente en 5 GHz. El parche compila, carga y permite anunciar canales AP de esa banda, pero **la prueba real de AP falló en el firmware** de esta Intel 8265 con kernel 7.2.11 y firmware 36.c8e8e144.0. No se considera una solución funcional para esta combinación. No demuestra que todos los equipos con iwlmvm fallen ni que toda alternativa futura sea imposible.
 
 ## Resultado de la prueba temporal
 
@@ -49,7 +48,7 @@ La radio sí opera en 5 GHz. Con el controlador y las restricciones actuales, th
 - País físico confirmado por el usuario: México. Se solicitó `MX` después de restaurar la conexión cliente. El router de entrada anunciaba `US`; el dominio resultante apareció como `98`, la intersección regulatoria identificada así por [cfg80211 en Linux](https://github.com/torvalds/linux/blob/master/net/wireless/reg.c). No se configuró un país alternativo para ampliar permisos.
 - Canales anunciados sin `no IR` ni DFS: **36, 40, 44, 48, 149, 153, 157, 161 y 165**. Los canales inferiores anunciaban 17 dBm y los superiores 22 dBm; son límites observados, no ajustes de potencia aplicados.
 - El diagnóstico real de thinkISP finalizó con `core_checks_passed=true`, bandas `a` y `bg`, y anchos anunciados de 20/40/80 MHz para 5 GHz. La disponibilidad de un ancho depende también del canal y no confirma su activación.
-- La conexión cliente se restauró por UUID sin registrar credenciales. No se crearon perfiles AP ni se probaron beacons, asociación, DHCP o navegación.
+- La conexión cliente se restauró por UUID sin registrar credenciales. En esta primera etapa no se crearon perfiles AP. Posteriormente se hizo el intento de activación descrito abajo.
 
 Los ensayos usan servicios transitorios de systemd con recuperación independiente de la terminal. Los primeros se revirtieron automáticamente: uno no conservó el paso exacto del fallo; los siguientes fueron rechazados por comprobaciones demasiado estrictas del verificador local (frecuencias decimales y dominio `98`). El ensayo final terminó en `success`.
 
@@ -66,3 +65,25 @@ sudo /usr/bin/python3 /var/lib/thinkisp-iwlmvm-trial-4/trial.py rollback
 ```
 
 Tras reiniciar, esta prueba necesita una nueva carga explícita; el script local de ensayo protege contra ejecuciones repetidas y no es un instalador persistente ni una solución para otros kernels.
+
+
+## Prueba real de activación posterior
+
+Se creó un perfil temporal con WPA2-PSK, banda `a`, canal 44 (5220 MHz), IPv4 compartida y autoconexión desactivada. El canal se eligió entre los anunciados sin `no IR` ni DFS. La clave aleatoria no se registró en comandos ni documentación. No se tocaron perfiles habituales ni se hizo persistente el módulo modificado.
+
+El primer ensayo se detuvo porque el perfil se cargó fuera de los directorios de conexiones reconocidos por NetworkManager. Se corrigió usando `/run/NetworkManager/system-connections` y verificando su UUID antes de desconectar la conexión cliente.
+
+En el segundo ensayo NetworkManager sí inició la activación, pero a las 08:52:06 del 22 de octubre de 2026 el kernel registró:
+
+```text
+Microcode SW error detected. Restarting 0x82000000.
+0x000014FC | ADVANCED_SYSASSERT
+FW error in SYNC CMD BINDING_CONTEXT_CMD
+Failed to send binding (action:1): -5
+```
+
+wpa_supplicant registró `Failed to set beacon parameters` y `Failed to initialize AP interface`. NetworkManager terminó con `supplicant-timeout`. No se confirmó un AP activo ni se alcanzaron las pruebas de asociación, DHCP o navegación. No se atribuye el fallo a potencia, país o contraseña: la evidencia directa es un fallo del firmware durante la activación.
+
+El servicio independiente eliminó el perfil de prueba y restauró la conexión cliente. Resultado: `/var/lib/thinkisp-5ghz-ap-trial-2/status.json`, `status=failed`, `connection_restored=true`.
+
+Se intentó además recargar el controlador original. La sesión ya no disponía de agente gráfico de PolicyKit ni de autorización sudo; el fallback pidió una contraseña en una terminal del agente y se canceló sin solicitar credenciales al usuario. Por ello **el módulo experimental sigue cargado en memoria**, aunque el AP de prueba fue eliminado y la conexión cliente está restaurada. Para retirarlo se necesita ejecutar el comando de reversión anterior en una terminal del usuario o reiniciar. No se instaló ningún cambio persistente del controlador.

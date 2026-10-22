@@ -41,7 +41,9 @@ jobs:
         env:
           THINKISP_WLAN: fixture-wifi
           THINKISP_ETH: fixture-upstream
-        run: python tests/integration/tui_roundtrip.py
+        run: |
+          python tests/integration/tui_roundtrip.py
+          python tests/integration/setup_roundtrip.py
 
   networkmanager:
     name: Offline NetworkManager · ${{ matrix.image }}

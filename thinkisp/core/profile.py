@@ -218,6 +218,17 @@ def validate_settings(settings, caps, tx_power=None):
         raise ThinkISPError("La contraseña WPA debe tener 8–63 caracteres ASCII o 64 dígitos hexadecimales.")
     if security == "sae" and (not password or any(c in password for c in "\n\r\0")):
         raise ThinkISPError("WPA3 requiere una contraseña sin saltos de línea.")
+    # Some nmcli versions accept out-of-range numeric enums without rejecting
+    # the serialized keyfile. Validate the controls we expose before any write.
+    enum_fields = {
+        '802-11-wireless.powersave': ('ahorro de energía', {'', '0', '1', '2', '3', 'default', 'ignore', 'disable', 'enable'}),
+        '802-11-wireless-security.pmf': ('protección de tramas PMF', {'', '0', '1', '2', '3', 'default', 'disable', 'optional', 'required'}),
+        '802-11-wireless.ap-isolation': ('aislamiento entre clientes', {'', '-1', '0', '1', 'default', 'no', 'yes', 'false', 'true'}),
+        '802-11-wireless.hidden': ('visibilidad', {'', '0', '1', 'no', 'yes', 'false', 'true'}),
+    }
+    for key, (label, allowed) in enum_fields.items():
+        if key in settings and str(settings[key]).lower() not in allowed:
+            raise ThinkISPError(f'El valor de {label} no es válido. Elige una opción del formulario.')
     band = settings.get("802-11-wireless.band", "")
     if band and band not in caps.bands:
         raise ThinkISPError("La banda elegida no tiene canales AP disponibles en este equipo.")
@@ -227,7 +238,7 @@ def validate_settings(settings, caps, tx_power=None):
         if settings.get('802-11-wireless-security.pmf', '') not in ('', '0', 'default', '3', 'required'):
             raise ThinkISPError('En 6 GHz, PMF debe ser obligatorio o quedar a cargo de WPA3.')
     try:
-        channel = int(settings.get("802-11-wireless.channel", "0"))
+        channel = int(settings.get("802-11-wireless.channel") or "0")
     except ValueError as exc:
         raise ThinkISPError("El canal debe ser un número o 0 para selección automática.") from exc
     available = [c for c in caps.channels if c.usable and (not band or c.band == band)]
@@ -257,13 +268,29 @@ def validate_settings(settings, caps, tx_power=None):
         raise ThinkISPError("El perfil de thinkISP debe mantener modo AP e IPv4 compartido.")
 
 
+def settings_arguments(settings):
+    """Translate form defaults to nmcli reset syntax; 0 is not a channel setter."""
+    normalized = dict(settings)
+    channel = '802-11-wireless.channel'
+    width = '802-11-wireless.channel-width'
+    if channel in normalized and str(normalized[channel]) in ('', '0'):
+        normalized[channel] = ''
+    if width in normalized and str(normalized[width]) in ('', '0'):
+        normalized[width] = 'auto'
+    # Apply dependent radio properties in a stable order regardless of edit order.
+    radio = ('802-11-wireless.band', channel, width)
+    ordered = [(key, value) for key, value in normalized.items() if key not in radio]
+    ordered += [(key, normalized[key]) for key in radio if key in normalized]
+    return [part for key, value in ordered for part in (key, str(value))]
+
+
 def save_profile(settings, caps, tx_power=None):
     """Valida antes de escribir y nunca sobrescribe un perfil ajeno por accidente."""
     validate_settings(settings, caps, tx_power)
     settings = dict(settings)
     settings.update({"802-11-wireless.mode": "ap", "ipv4.method": "shared"})
     # Validar todo el conjunto con el parser del NetworkManager instalado.
-    pairs = [part for key, value in settings.items() for part in (key, str(value))]
+    pairs = settings_arguments(settings)
     run_cmd(["nmcli", "--offline", "connection", "modify", *pairs],
             input_text=_offline_template(), check=True)
     existing = profile_uuid()

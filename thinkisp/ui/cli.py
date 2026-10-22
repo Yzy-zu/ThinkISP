@@ -88,6 +88,32 @@ def cmd_setup(args):
     configure_hotspot()
 
 
+def cmd_network(args):
+    from thinkisp.core.deployment import inspect_deployment, store_deployment, report_lines
+    from thinkisp.core.topology import NetworkIntent, evaluate_plan
+    report = inspect_deployment()
+    if args.network_action == 'plan':
+        values = dict(report['saved_intent'])
+        for arg, key in [('ap', 'ap_interface'), ('upstream', 'upstream_interface'), ('mode', 'mode'), ('engine', 'portal_engine')]:
+            value = getattr(args, arg, None)
+            if value is not None:
+                values[key] = None if key.endswith('_interface') and value == 'auto' else value
+        intent = NetworkIntent(**values).validate()
+        report['plan'] = evaluate_plan(report['inventory'], intent, fallback_ap=WLAN_IFACE)
+    report['saved'] = False
+    if getattr(args, 'save', False):
+        store_deployment(report)
+        report['saved'] = True
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print('\n'.join(report_lines(report)))
+        if report['saved']:
+            print('Plan guardado por perfil. No se cambió la red ni se activó el portal.')
+    if not report['plan']['configuration_valid']:
+        raise ThinkISPError('El plan tiene incompatibilidades. Consulta el informe anterior.')
+
+
 def cmd_doctor(args):
     from thinkisp.core.doctor import collect_report
     report = collect_report()

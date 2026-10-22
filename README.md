@@ -1,5 +1,6 @@
 # thinkISP
 
+**Versión 0.1.0b1 · beta.** Portal cautivo en desarrollo por fases.
 Gestor de puntos de acceso para Linux. Permite configurar una red doméstica con las capacidades que el adaptador Wi-Fi y NetworkManager exponen en cada equipo.
 
 El programa detecta las interfaces del sistema y consulta al controlador sus canales, restricciones regulatorias y límites de potencia. No presupone una marca de computadora, un SSID, una contraseña, un canal ni una velocidad de enlace.
@@ -36,6 +37,20 @@ python3 main.py doctor --json
 
 El informe distingue herramientas obligatorias, funciones opcionales y comprobaciones pendientes. No modifica perfiles, DNS, firewall o regulación, no solicita autorización y no consulta contraseñas. Una interfaz o un parser disponible no certifican una conexión Wi-Fi real. Consulta el [informe de compatibilidad y pruebas ejecutadas](docs/compatibility.md).
 
+## Conectividad y portal cautivo · fase 1
+
+El panel **F3 Red → Conectividad** (**N**) permite preparar por perfil la interfaz AP, entrada de Internet, topología y motor previsto del portal. El inventario distingue Ethernet/USB, otras radios Wi-Fi y concurrencia cliente/AP sobre una misma radio según lo anunciado por cada controlador.
+
+```bash
+thinkisp network inspect
+thinkisp network inspect --json
+thinkisp network plan --mode auto --engine auto
+```
+
+`network plan` admite `--ap`, `--upstream`, `--mode auto|routed|repeater`, `--engine auto|none|opennds` y `--save`. Guardar registra la intención por UUID del perfil AP existente; **no aplica cambios de red, no crea el repetidor ni activa el portal**. Si falta una herramienta o permiso, el informe identifica lo que no se pudo verificar.
+
+Las siguientes fases añaden conectividad/repetidor, motor de acceso, sesiones configurables y plantillas de términos, registro, anuncio o HTML/CSS/JS propios. El [alcance y la hoja de ruta](docs/portal-roadmap.md) distinguen lo implementado de lo pendiente.
+
 ## Primera ejecución y configuración
 
 Si no existe un perfil de thinkISP, `thinkisp`, `thinkisp tui` y `thinkisp on` abren el asistente antes de encender la red. El asistente solicita el SSID y la contraseña elegidos por el usuario; el nombre del equipo se usa únicamente como sugerencia inicial para el SSID.
@@ -60,7 +75,7 @@ thinkisp setup
 thinkisp config
 ```
 
-En el panel, presiona **C** o selecciona **Configurar**. El editor se abre en la misma terminal y, al terminar, vuelve al panel.
+En el panel, presiona **C** o selecciona **Configurar**. El formulario se abre dentro del panel, sin menús numéricos ni salir a la consola. **Tab** o **←/→** cambia de sección; **↑/↓** selecciona un campo y **Enter** lo edita. **F2** valida y guarda; **Esc** vuelve y permite descartar cambios pendientes. La contraseña permanece oculta y se confirma al cambiarla. Los campos que el sistema no expone aparecen deshabilitados.
 
 Seleccionar **Guardar** valida los ajustes antes de escribirlos en NetworkManager. Si el hotspot está activo, intenta aplicar los cambios reiniciándolo. **Cancelar** antes de guardar no crea ni modifica un perfil.
 
@@ -78,6 +93,7 @@ Variables opcionales:
 
 | Variable | Uso |
 | --- | --- |
+| `THINKISP_COLOR` | `always` (predeterminado): color si la terminal lo admite; `never`: sin color; `auto`: respeta también `NO_COLOR`. |
 | `THINKISP_PROFILE` | Nombre del perfil que se va a configurar y gestionar. |
 | `THINKISP_WLAN` | Interfaz Wi-Fi elegida por el usuario cuando hay varios adaptadores. |
 | `THINKISP_ETH` | Interfaz de salida elegida por el usuario. |
@@ -126,7 +142,15 @@ Los fallos operativos se imprimen en stderr y el CLI termina con código 1. Una 
 
 Abre `thinkisp tui` (o `python3 main.py tui` desde el proyecto). Necesita al menos **76 columnas × 24 filas**; una ventana más amplia muestra más dispositivos y columnas de enlace.
 
-La pantalla separa conexión, tráfico de la sesión, acciones y dispositivos. Los nombres de red, interfaces, radio y equipos se consultan al sistema. **Tab** cambia de panel; las **flechas** mueven la selección y **Enter** abre una acción o los detalles del dispositivo. **RePág/AvPág** e **Inicio/Fin** recorren listas largas. **?** muestra los atajos. El ratón permite seleccionar acciones, opciones y botones de los diálogos.
+El panel utiliza una paleta oscura con acentos violeta/cian, estados en verde/ámbar/rojo y selección de alto contraste. Se adapta a terminales de 256 u 8 colores y mantiene selección por contraste en modo sin color. **/** o **Ctrl+P** abre una paleta de acciones: escribe un nombre, elige con flechas y abre con Enter. Esc cierra la búsqueda. El ratón admite rueda para desplazarse y doble clic para ver un dispositivo.
+
+El dashboard tiene cinco vistas: **F1 Resumen**, **F2 Dispositivos**, **F3 Red**, **F4 Rendimiento** y **F5 DNS**. También puedes cambiar con **[ / ]** o haciendo clic en las pestañas. Cada vista muestra sus propias acciones; no necesitas recorrer una parrilla con todas las funciones.
+
+En Resumen y Dispositivos, **Tab** alterna entre acciones y la tabla; las **flechas** mueven la selección y **Enter** abre la acción o los detalles del dispositivo. **RePág/AvPág** e **Inicio/Fin** recorren listas largas. En las demás vistas, **Tab** recorre las acciones. **?** muestra los controles completos.
+
+Rendimiento conserva hasta 90 muestras de tráfico de la interfaz en esta ejecución, con gráficas de escala relativa, intervalo observado y pico de descarga. Las tasas por dispositivo se calculan a partir de los contadores TX/RX reales, si el controlador los entrega; la primera muestra, los contadores ausentes y los reinicios se muestran sin medición. Las tasas de enlace Wi-Fi se muestran por separado en los detalles. La tabla de dispositivos reserva más espacio en su propia vista.
+
+**U** abre la lista de bloqueos guardados, incluidos clientes desconectados; puedes seleccionar uno y permitir su acceso con Enter. **T** y **L** abren listas de temporizador y límites: usa **↑/↓** para elegir o escribe un tiempo/velocidad personalizado. Enter aplica y Esc descarta. En DNS puedes comparar proveedores, restaurar la configuración anterior con **E** y repetir la comparación con **R** dentro del diálogo.
 
 Las consultas se ejecutan en segundo plano con un intervalo de dos segundos entre lecturas. El teclado se atiende cada 100 ms mientras no haya una interacción externa del sistema. Si una lectura falla, se conserva la última muestra y se marca como sin actualizar. Los resultados anteriores a un cambio de configuración se descartan. Durante las mediciones DNS y de transferencia puedes cerrar el diálogo y seguir navegando; la telemetría continúa.
 
@@ -157,6 +181,7 @@ Para comprobar teclado, diálogos, resultados de fondo y redimensionamiento con 
 
 ```bash
 python3 tests/integration/tui_roundtrip.py
+python3 tests/integration/setup_roundtrip.py
 ```
 
 La prueba de integración del firewall requiere Linux, `nft`, `ip`, `ping` y soporte de namespaces de usuario/red. Comprueba bloqueo y desbloqueo IPv4/IPv6 y conservación de tablas ajenas en redes virtuales aisladas:

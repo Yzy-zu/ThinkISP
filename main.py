@@ -7,6 +7,7 @@ import argparse
 import sys
 
 from thinkisp.errors import ThinkISPError
+from thinkisp import __version__
 
 
 def _handler(name):
@@ -41,6 +42,7 @@ cmd_widget = _handler('cmd_widget')
 cmd_setup = _handler('cmd_setup')
 cmd_recover = _handler('cmd_recover')
 cmd_doctor = _handler('cmd_doctor')
+cmd_network = _handler('cmd_network')
 
 
 def build_parser():
@@ -49,9 +51,23 @@ def build_parser():
         prog="thinkisp",
         description="thinkISP - Configuración y gestión de un punto de acceso Linux"
     )
+    parser.add_argument("--version", action="version", version=f"thinkISP {__version__}")
     subparsers = parser.add_subparsers(dest="command")
     doctor = subparsers.add_parser('doctor', help='Diagnóstico de compatibilidad sin modificar la red')
     doctor.add_argument('--json', action='store_true', help='Informe JSON para soporte y automatización')
+
+    network = subparsers.add_parser('network', help='Inventario y plan de conectividad por perfil (beta, sin aplicar cambios de red)')
+    network.add_argument('--json', action='store_true', help='Inventario y plan en JSON')
+    network_commands = network.add_subparsers(dest='network_action')
+    inspect = network_commands.add_parser('inspect', help='Detectar interfaces, rutas y compatibilidad sin modificar la red')
+    inspect.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
+    plan = network_commands.add_parser('plan', help='Preparar la selección de interfaces y motor del portal')
+    plan.add_argument('--ap', help='Interfaz AP o auto')
+    plan.add_argument('--upstream', help='Interfaz de entrada de Internet o auto')
+    plan.add_argument('--mode', choices=['auto', 'routed', 'repeater'])
+    plan.add_argument('--engine', choices=['auto', 'none', 'opennds'])
+    plan.add_argument('--save', action='store_true', help='Guardar intención por perfil; no aplicar ni activar servicios')
+    plan.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
 
     # Básicos
     subparsers.add_parser("setup", aliases=["config"], help="Panel de configuración según las capacidades del equipo")
@@ -117,7 +133,9 @@ def _main():
         except ImportError as exc:
             raise ThinkISPError("El panel necesita el módulo curses de Python. Instálalo con el gestor de paquetes de tu distribución o usa los comandos CLI.") from exc
 
-    if args.command == 'doctor':
+    if args.command == 'network':
+        cmd_network(args)
+    elif args.command == 'doctor':
         cmd_doctor(args)
     elif args.command in ("setup", "config"):
         cmd_setup(args)

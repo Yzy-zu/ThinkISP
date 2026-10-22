@@ -40,13 +40,7 @@ class Canvas:
 
 def render_panel(canvas, state):
     rows, cols = canvas.getmaxyx()
-    y = tui.render_header(canvas, state, rows, cols)
-    y = tui.render_status_bar(canvas, state, y, cols)
-    y = tui.render_metrics_bar(canvas, state, y, cols)
-    y = tui.render_buttons(canvas, state, y, cols)
-    tui.render_clients_table(canvas, state, y, rows, cols)
-    tui.render_footer(canvas, state, rows, cols)
-    return y
+    return tui.render_page(canvas, state, rows, cols)
 
 
 class TestPanel(unittest.TestCase):
@@ -73,7 +67,7 @@ class TestPanel(unittest.TestCase):
                 for section in ['thinkISP', 'CONEXIÓN', 'ACCIONES', 'DISPOSITIVOS', 'DESCARGA']:
                     self.assertIn(section, text)
                 self.assertLessEqual(table_y + 5, rows - 2)
-                self.assertEqual(len([r for r in self.state.mouse_regions if r['type'] == 'button']), len(tui.BUTTON_DEFS))
+                self.assertEqual(len([r for r in self.state.mouse_regions if r['type'] == 'button']), len(tui.page_actions(self.state)))
                 self.assertNotIn('ThinkPad', text)
 
     def test_unconfirmed_state_is_distinct_from_off_and_prevents_toggle(self):
@@ -264,6 +258,161 @@ class TestPanel(unittest.TestCase):
             tui.update_telemetry(self.state)
         self.assertEqual(self.state.instant_down_bps, 160)
         self.assertEqual(self.state.instant_up_bps, 40)
+
+    def test_all_pages_render_with_contextual_actions_at_minimum_size(self):
+        for rows, cols in [(24, 76), (24, 80), (30, 120)]:
+            for page in range(len(tui.PAGES)):
+                with self.subTest(size=(rows, cols), page=page):
+                    tui.select_page(self.state, page)
+                    self.state.mouse_regions = []
+                    canvas = Canvas(rows, cols)
+                    tui.render_page(canvas, self.state, rows, cols)
+                    regions = self.state.mouse_regions
+                    self.assertEqual(len([r for r in regions if r['type'] == 'page']), 5)
+                    self.assertEqual([r['id'] for r in regions if r['type'] == 'button'], list(tui.PAGES[page][1]))
+                    for region in regions:
+                        y, x, width, height = region['rect']
+                        self.assertLessEqual(x + width, cols)
+                        self.assertLessEqual(y + height, rows - 2)
+                    self.assertIn('F1–F5', canvas.text())
+
+    def test_page_keyboard_and_mouse_keep_selection_in_bounds(self):
+        tui.handle_keypress(tui.curses.KEY_F4, self.state, 80)
+        self.assertEqual(self.state.page, 3)
+        for _ in range(10):
+            tui.handle_keypress(tui.curses.KEY_RIGHT, self.state, 80)
+        self.assertLess(self.state.btn_index, len(tui.page_actions(self.state)))
+        tui.render_page(Canvas(24, 80), self.state, 24, 80)
+        target = next(r for r in self.state.mouse_regions if r['type'] == 'page' and r['index'] == 1)
+        tui.handle_mouse(target['rect'][0], target['rect'][1], self.state)
+        self.assertEqual((self.state.page, self.state.focus, self.state.btn_index), (1, tui.FOCUS_CLIENTS, 0))
+
+    def test_custom_limit_applies_decimal_value_and_invalid_zero_stays_open(self):
+        self.state.modal = tui.MODAL_LIMIT
+        self.state.modal_data = {'preset_idx': 0}
+        for char in '0':
+            tui.handle_keypress(ord(char), self.state, 80)
+        with patch.object(tui, 'set_rate_limit', return_value=(True, 'Aplicado')) as limit:
+            tui.handle_keypress(10, self.state, 80)
+            limit.assert_not_called()
+            self.assertEqual(self.state.modal, tui.MODAL_LIMIT)
+            tui.handle_keypress(127, self.state, 80)
+            for char in '12.5':
+                tui.handle_keypress(ord(char), self.state, 80)
+            tui.handle_keypress(10, self.state, 80)
+        limit.assert_called_once_with('12.5')
+        self.assertIsNone(self.state.modal)
+
+    def test_timer_arrow_selection_replaces_custom_text(self):
+        self.state.modal = tui.MODAL_TIMER
+        self.state.modal_data = {'preset_idx': 1, 'custom_text': 'invalid'}
+        tui.handle_keypress(tui.curses.KEY_DOWN, self.state, 80)
+        with patch.object(tui, 'set_timer_countdown', return_value=(True, 'Programado')) as timer:
+            tui.handle_keypress(10, self.state, 80)
+        timer.assert_called_once_with(45 * 60)
+
+    def test_disconnected_blocked_client_can_be_allowed_from_saved_list(self):
+        with patch.object(tui, 'get_blocked_clients', return_value=['02:00:00:00:00:01']):
+            tui.execute_button_action('blocked', self.state)
+        self.assertEqual(self.state.modal, tui.MODAL_BLOCKED)
+        self.assertFalse(self.state.clients)
+        with patch.object(tui, 'unkick_client', return_value=(True, 'Permitido')) as allow:
+            tui.handle_keypress(10, self.state, 80)
+        allow.assert_called_once_with('02:00:00:00:00:01')
+
+    def test_traffic_history_is_bounded_and_redraw_does_not_add_samples(self):
+        for n in range(110):
+            tui.apply_snapshot(self.state, {'instant_down_bps': n, 'instant_up_bps': n / 2})
+        self.assertEqual(len(self.state.traffic_history), 90)
+        tui.select_page(self.state, 3)
+        for _ in range(3):
+            tui.render_page(Canvas(24, 80), self.state, 24, 80)
+        self.assertEqual(len(self.state.traffic_history), 90)
+        self.assertEqual(self.state.traffic_history[-1][1], 109)
+        tui.apply_snapshot(self.state, {'interface': 'another-wifi'})
+        self.assertFalse(self.state.traffic_history)
+
+    def test_sparkline_distinguishes_no_samples_from_zero_traffic(self):
+        self.assertIn('Esperando', tui.sparkline([], 20))
+        self.assertEqual(tui.sparkline([0, 0, 0], 20), '▁▁▁')
+        self.assertEqual(tui.sparkline([0, 10, 20], 20), '▁▄█')
+
+    def test_client_rates_use_real_counters_and_missing_or_reset_is_unknown(self):
+        self.state._last_poll_time = 10
+        self.state.clients = [{'mac':'02:00:00:00:00:01','tx_bytes':100,'rx_bytes':100}]
+        current = [{'mac':'02:00:00:00:00:01','tx_bytes':500,'rx_bytes':50},
+                   {'mac':'02:00:00:00:00:02','tx_bytes':900,'rx_bytes':200}]
+        values = {
+            'is_hotspot_active': True, 'hotspot_details': {'ssid':'Demo','radio':'5 GHz','security':'wpa-psk','interface':'wifi-test','hidden':False},
+            'get_ethernet_status': {}, 'get_hotspot_ip':'192.0.2.1','get_ip_forward_status':True,
+            'get_gaming_mode':False,'dns_status':('Sistema',False),'get_rate_limit':None,
+            'get_timer_status':None,'get_iface_bytes':(0,0),'load_state':{},
+            'get_connected_clients':current,'get_blocked_clients':[],
+        }
+        with ExitStack() as stack:
+            for name, value in values.items():
+                stack.enter_context(patch.object(tui, name, return_value=value))
+            stack.enter_context(patch.object(tui.time,'monotonic',return_value=12))
+            tui.update_telemetry(self.state)
+        self.assertEqual(self.state.clients[0]['down_bps'],200)
+        self.assertIsNone(self.state.clients[0]['up_bps'])
+        self.assertIsNone(self.state.clients[1]['down_bps'])
+
+    def test_dns_and_blocked_lists_scroll_to_selected_items(self):
+        self.state.modal_data = {'selected_idx':14,'results':[
+            {'key':str(i),'name':f'Proveedor-{i}','ip':'192.0.2.53','time':10} for i in range(15)]}
+        canvas = Canvas(24,80)
+        tui.render_dns_modal(canvas,self.state,24,80)
+        self.assertIn('Proveedor-14',canvas.text())
+        self.state.modal_data = {'selected_idx':19,'clients':[f'02:00:00:00:00:{i:02x}' for i in range(20)]}
+        canvas = Canvas(24,80)
+        tui.render_blocked_modal(canvas,self.state,24,80)
+        self.assertIn('02:00:00:00:00:13',canvas.text())
+
+    def test_command_search_matches_accents_and_never_runs_actions_while_typing(self):
+        with patch.object(tui, 'set_rate_limit') as limit, patch.object(tui, 'set_dns_provider') as dns:
+            tui.handle_keypress(ord('/'), self.state, 80)
+            for char in 'limite':
+                tui.handle_keypress(ord(char), self.state, 80)
+            self.assertEqual(self.state.modal, tui.MODAL_COMMANDS)
+            self.assertEqual([item['id'] for item in tui.command_matches('limite')], ['limit'])
+            limit.assert_not_called()
+            dns.assert_not_called()
+            tui.handle_keypress(10, self.state, 80)
+        self.assertEqual(self.state.modal, tui.MODAL_LIMIT)
+
+    def test_palette_escape_and_q_do_not_quit_the_application(self):
+        tui.handle_keypress(16, self.state, 80)
+        tui.handle_keypress(ord('q'), self.state, 80)
+        self.assertEqual(self.state.modal_data['query'], 'q')
+        self.assertTrue(self.state.running)
+        tui.handle_keypress(27, self.state, 80)
+        self.assertIsNone(self.state.modal)
+        self.assertTrue(self.state.running)
+
+    def test_palette_navigates_pages_and_has_an_empty_results_state(self):
+        tui.handle_keypress(16, self.state, 80)
+        for char in 'rendimiento':
+            tui.handle_keypress(ord(char), self.state, 80)
+        tui.handle_keypress(10, self.state, 80)
+        self.assertEqual(self.state.page, 3)
+        tui.handle_keypress(ord('/'), self.state, 80)
+        self.state.modal_data['query'] = 'xyzdoesnotexist'
+        canvas = Canvas(24, 80)
+        tui.render_commands_modal(canvas, self.state, 24, 80)
+        self.assertIn('Sin resultados', canvas.text())
+        tui.handle_keypress(10, self.state, 80)
+        self.assertEqual(self.state.modal, tui.MODAL_COMMANDS)
+
+    def test_double_click_opens_the_selected_client_details(self):
+        self.state.hotspot_active = True
+        self.state.clients = [{'mac':'02:00:00:00:00:01','hostname':'equipo-prueba'}]
+        tui.select_page(self.state, 1)
+        tui.render_page(Canvas(24,80),self.state,24,80)
+        region = next(r for r in self.state.mouse_regions if r['type'] == 'client')
+        tui.handle_mouse(region['rect'][0],region['rect'][1],self.state,activate=True)
+        self.assertEqual(self.state.modal,tui.MODAL_KICK)
+        self.assertEqual(self.state.modal_data['target_client']['hostname'],'equipo-prueba')
 
 
 class TestPanelTasks(unittest.TestCase):

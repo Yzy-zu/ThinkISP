@@ -29,7 +29,7 @@ from thinkisp.core.network import (
     state_lock,
 )
 from thinkisp.core.profile import (
-    apply_radio_settings, hotspot_details, inspect_capabilities, require_hotspot_profile, profile_uuid,
+    apply_radio_settings, hotspot_details, inspect_capabilities, require_hotspot_profile, profile_uuid, settings_arguments,
 )
 from thinkisp.core.access import apply_saved_blocks, clear_applied_blocks, set_client_block, blocked_clients
 from thinkisp.core.dns_state import apply_saved_dns, restore_dns
@@ -117,10 +117,16 @@ def get_connected_clients(check=False):
                     "signal": None,
                     "tx_mbps": None,
                     "rx_mbps": None,
-                    "conn_time": None
+                    "conn_time": None,
+                    "rx_bytes": None,
+                    "tx_bytes": None,
                 }
                 continue
             if current_mac:
+                for counter in ("rx_bytes", "tx_bytes"):
+                    match = re.search(counter.replace("_", " ") + r":\s+(\d+)", line)
+                    if match:
+                        stations[current_mac][counter] = int(match[1])
                 sig = re.search(r"signal:\s+(-?\d+)", line)
                 if sig:
                     stations[current_mac]["signal"] = int(sig.group(1))
@@ -157,7 +163,9 @@ def get_connected_clients(check=False):
             "signal": data["signal"],
             "tx_mbps": data["tx_mbps"],
             "rx_mbps": data["rx_mbps"],
-            "conn_time": data["conn_time"]
+            "conn_time": data["conn_time"],
+            "rx_bytes": data["rx_bytes"],
+            "tx_bytes": data["tx_bytes"],
         })
 
     return clients
@@ -383,10 +391,10 @@ def set_band(band):
     caps = inspect_capabilities()
     if selected and selected not in caps.bands:
         raise ThinkISPError("La tarjeta no anuncia canales AP disponibles en esa banda.")
-    args = ["nmcli", "connection", "modify", "id", HOTSPOT_CONN,
-            "802-11-wireless.band", selected, "802-11-wireless.channel", "0"]
+    radio = {"802-11-wireless.band": selected, "802-11-wireless.channel": "0"}
     if caps.optional.get("802-11-wireless.channel-width"):
-        args += ["802-11-wireless.channel-width", "auto"]
+        radio["802-11-wireless.channel-width"] = "auto"
+    args = ["nmcli", "connection", "modify", "id", HOTSPOT_CONN, *settings_arguments(radio)]
     run_cmd(args, check=True)
     if is_hotspot_active():
         run_cmd(["nmcli", "connection", "up", "id", HOTSPOT_CONN], check=True, timeout=65)

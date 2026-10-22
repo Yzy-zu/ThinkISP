@@ -130,7 +130,7 @@ class TestProfiles(unittest.TestCase):
         create = next(args for args in commands if args[:3] == ['nmcli', 'connection', 'add'])
         self.assertEqual(create[create.index('802-11-wireless.mode') + 1], 'ap')
         self.assertEqual(create[create.index('ipv4.method') + 1], 'shared')
-        self.assertEqual(create[create.index('802-11-wireless.channel') + 1], '0')
+        self.assertEqual(create[create.index('802-11-wireless.channel') + 1], '')
         self.assertNotIn('802-11-wireless.tx-power', create)
         self.assertNotIn('ipv4.addresses', create)
         saved = save.call_args.args[0]

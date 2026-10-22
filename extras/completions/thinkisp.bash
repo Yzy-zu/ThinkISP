@@ -21,7 +21,7 @@ _thinkisp_completions() {
         cword=$COMP_CWORD
     fi
 
-    local commands="doctor setup config on off recover boost status clients speed top stats widget kick unkick blocked stealth timer gaming limit adblock dns qr band toggle tui"
+    local commands="network doctor setup config on off recover boost status clients speed top stats widget kick unkick blocked stealth timer gaming limit adblock dns qr band toggle tui"
     local global_flags="-h --help"
 
     # Nivel 1: Subcomandos u opciones globales
@@ -38,6 +38,14 @@ _thinkisp_completions() {
     local cmd="${words[1]}"
 
     case "$cmd" in
+        network)
+            case "$prev" in
+                --mode) COMPREPLY=($(compgen -W "auto routed repeater" -- "$cur")) ;;
+                --engine) COMPREPLY=($(compgen -W "auto none opennds" -- "$cur")) ;;
+                --ap|--upstream) COMPREPLY=($(compgen -W "auto" -- "$cur")) ;;
+                *) COMPREPLY=($(compgen -W "inspect plan --ap --upstream --mode --engine --save --json --help" -- "$cur")) ;;
+            esac
+            ;;
         doctor)
             COMPREPLY=($(compgen -W "--json --help" -- "$cur"))
             ;;

@@ -124,3 +124,14 @@ for cmd in thinkisp isp
     complete -c $cmd -n "__fish_use_subcommand" -a "doctor" -d "Diagnóstico de compatibilidad sin modificar la red"
     complete -c $cmd -n "__fish_seen_subcommand_from doctor" -l json -d "Informe JSON"
 end
+
+for cmd in thinkisp isp
+    complete -c $cmd -n "__fish_use_subcommand" -a network -d "Plan de conectividad por perfil (sin aplicar)"
+    complete -c $cmd -n "__fish_seen_subcommand_from network" -a "inspect plan"
+    complete -c $cmd -n "__fish_seen_subcommand_from network" -l json
+    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l ap -r
+    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l upstream -r
+    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l mode -r -a "auto routed repeater"
+    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l engine -r -a "auto none opennds"
+    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l save
+end

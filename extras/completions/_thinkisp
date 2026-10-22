@@ -40,6 +40,7 @@ _thinkisp() {
 
     local -a subcommands
     subcommands=(
+        'network:Inventario y plan de conectividad por perfil'
         'doctor:Diagnóstico de compatibilidad sin modificar la red'
         'setup:Panel de configuración según las capacidades del equipo'
         'config:Abre el panel de configuración'
@@ -86,6 +87,16 @@ _thinkisp() {
                     _arguments \
                         '(-h --help)'{-h,--help}'[Muestra ayuda]' \
                         '(-w --watch)'{-w,--watch}'[Emitir actualizaciones continuas cada 2s]'
+                    ;;
+                network)
+                    _arguments \
+                        "--json[Informe JSON]" \
+                        "--save[Guardar plan sin aplicar]" \
+                        "--ap[Adaptador AP o auto]:interfaz:" \
+                        "--upstream[Entrada de Internet o auto]:interfaz:" \
+                        "--mode[Topología]:modo:(auto routed repeater)" \
+                        "--engine[Motor previsto]:motor:(auto none opennds)" \
+                        "*:acción:(inspect plan)"
                     ;;
                 stealth)
                     local -a stealth_modes

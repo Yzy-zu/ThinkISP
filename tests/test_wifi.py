@@ -308,6 +308,8 @@ class TestClientInspection(unittest.TestCase):
         self.assertEqual(c1["tx_mbps"], 866.7)
         self.assertEqual(c1["rx_mbps"], 433.3)
         self.assertEqual(c1["conn_time"], 350)
+        self.assertEqual(c1["rx_bytes"], 1048576)
+        self.assertEqual(c1["tx_bytes"], 2097152)
 
         c2 = next(c for c in clients if c["mac"] == "aa:bb:cc:dd:ee:ff")
         self.assertEqual(c2["ip"], "10.42.0.25")
@@ -346,7 +348,7 @@ class TestClientAccessControl(unittest.TestCase):
                 set_band('5g')
             run.assert_not_called()
             self.assertTrue(set_band('2.4g')[0])
-            self.assertEqual(run.call_args.args[0][-4:], ['802-11-wireless.band', 'bg', '802-11-wireless.channel', '0'])
+            self.assertEqual(run.call_args.args[0][-4:], ['802-11-wireless.band', 'bg', '802-11-wireless.channel', ''])
             self.assertTrue(run.call_args.kwargs['check'])
 
     def test_qr_payload_escapes_credentials_and_records_hidden_network(self):

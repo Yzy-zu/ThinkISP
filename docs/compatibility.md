@@ -1,6 +1,6 @@
 # Compatibilidad de thinkISP
 
-Revisión del 22 de octubre de 2026. Las pruebas descritas no activaron un hotspot ni cambiaron perfiles, DNS, reglas del equipo o el dominio regulatorio.
+Revisión del 22 de octubre de 2026. Las pruebas automatizadas no activaron un hotspot ni cambiaron perfiles, DNS, reglas del equipo o el dominio regulatorio. El intento de AP físico posterior y su fallo de firmware se describen en el diagnóstico del equipo y en la investigación de 5 GHz.
 
 ## Requisitos por función
 
@@ -16,6 +16,7 @@ Revisión del 22 de octubre de 2026. Las pruebas descritas no activaron un hotsp
 | Compartir Internet y DNS | Salida distinta de la interfaz del AP. Se respeta la métrica de las rutas y se admiten nombres personalizados, USB, bridges y bonds. IPv6 se usa como alternativa de detección; una salida exclusivamente IPv6 no garantiza servicio IPv4 a los clientes. VPN y reglas de encaminamiento específicas requieren validación propia. |
 | Bloqueo por MAC | `nft`, JSON y soporte del kernel para tabla netdev y hook ingress. Requiere CAP_NET_ADMIN o autorización PolicyKit; `pkexec` no es obligatorio para el AP básico. |
 | CAKE/TBF | Soporte del kernel y de NetworkManager para la cola elegida. `tc` comprueba la cola aplicada; una aceptación offline no confirma que el módulo del kernel esté disponible. |
+| Plan de conectividad | Inventario y preferencias por UUID; modos routed/repeater y motor previsto. La concurrencia anunciada no implementa un repetidor. Consulta [fase 1](portal-roadmap.md). |
 | Panel | Módulo curses de Python, entrada/salida TTY, locale UTF-8 y TERM válido. Tamaño mínimo 76×24. La selección también se distingue sin color. Sin TTY se usan comandos CLI. |
 | Diagnósticos y extras | `dig` para comparar DNS, `curl` para transferencia, `qrencode` para QR, `ethtool` para velocidad del enlace y `notify-send` para notificaciones. Su ausencia sólo afecta a la función correspondiente. |
 
@@ -25,9 +26,10 @@ El requisito `--offline` está documentado por el [anuncio oficial de NetworkMan
 
 | Comprobación | Resultado |
 | --- | --- |
-| Suite en seis versiones reales de Python, 3.9–3.14 | 220 pruebas aprobadas por versión. |
-| Curses real en pseudoterminal, en las seis versiones | Teclado, diálogos, resultado tardío de un trabajo, redimensionamiento a 80×24 y salida limpia aprobados. Datos de red simulados. |
-| Parser offline instalado: nmcli 1.58.1 | Perfiles AP seguros, SSID Unicode, canal, visibilidad, IPv4 compartido, DNS en perfil de salida, CAKE/TBF y propiedades opcionales aprobados. Ningún perfil real creado. |
+| Suite en seis versiones reales de Python, 3.9–3.14 | 284 pruebas aprobadas por versión. |
+| Curses real en pseudoterminal, en las seis versiones | Color real de curses y paleta de acciones con búsqueda, cinco vistas con teclas de función, configuración integrada, temporizador, límites, bloqueados, DNS, resultado tardío de un trabajo, redimensionamiento a 80×24 y salida limpia aprobados. Datos de red simulados. |
+| Formulario de configuración curses real, Python 3.9–3.14 | Edición de SSID Unicode, contraseña oculta y confirmada, selección con flechas de banda/canal, pestañas, F2 y redimensionamiento a 80×24 aprobados. Guardado simulado, sin modificar la red. |
+| Parser offline instalado: nmcli 1.58.1 | Formulario completo con canal automático en banda automática/2.4/5 GHz, reinicio de canal fijo a automático, SSID Unicode, seguridad, visibilidad, ahorro de energía, MTU, PMF, aislamiento, DHCP, DNS en perfil de salida, CAKE/TBF y propiedades opcionales aprobados. Ningún perfil real creado. |
 | Wheel, Python 3.14 | Construcción e instalación en venv temporal; módulos y entry points `thinkisp` e `isp` verificados sin descargar dependencias. |
 | Instalador | Rutas con espacios, comillas, `$`, `&`, `|` y `%`; lanzadores y completados en directorios de usuario temporales. Desktop Entry validado. |
 | Shell | Sintaxis de Bash y Fish verificada localmente. Zsh queda incluido en la matriz de CI. |
@@ -35,17 +37,25 @@ El requisito `--offline` está documentado por el [anuncio oficial de NetworkMan
 
 La CI queda configurada para Python 3.9–3.14 y parsers de NetworkManager de Debian bookworm/trixie y Ubuntu 24.04. **Configurar esa matriz no equivale a haberla ejecutado en GitHub en esta sesión**. Tampoco equivale a certificar el Wi-Fi real de esas distribuciones.
 
+## Regresión de canal automático y cobertura del guardado
+
+El formulario conservaba `0` para representar canal automático y se enviaba literalmente a nmcli, que rechaza ese valor al modificar la propiedad. Se corrigió la serialización compartida: `0`/vacío en el formulario se convierte en el argumento vacío que restablece el canal. El comando de cambio de banda utiliza esa misma conversión.
+
+Las pruebas anteriores del parser usaban un canal fijo y no cubrían el formulario inicial completo. `tests/test_profile_nmcli.py` recorre ahora el guardado de producción usando el parser nmcli real y sólo intercepta las escrituras al daemon y al estado local. Comprueba creación, edición, restablecimiento de canal, controles opcionales y valores inválidos. También valida el comando de banda. Se comprueba que los argumentos validados y enviados al guardado sean idénticos y que un rechazo no intente escribir perfiles.
+
+El parser instalado acepta algunos valores numéricos fuera del rango de las enumeraciones, por ejemplo `powersave=99`. Por eso ahorro de energía, PMF, aislamiento y visibilidad tienen además validación local. Estas comprobaciones cubren el perfil y sus argumentos; no certifican aceptación del firmware, permisos, asociación o navegación.
+
 ## Diagnóstico del equipo consultado
 
 La consulta de sólo lectura encontró una interfaz con controlador `iwlwifi`, AP anunciado en 2.4 GHz, 13 canales permitidos y anchos aceptados de 20/40 MHz. Los canales de 5 GHz estaban restringidos para iniciar transmisión. Son observaciones del equipo y de su estado regulatorio durante esta revisión, no valores usados por el programa ni una limitación global de thinkISP.
 
-La [investigación específica de 5 GHz](5ghz-investigation.md) identifica la Intel 8265, confirma su conexión cliente de 5 GHz y explica la restricción LAR del stack instalado y la prueba temporal de un módulo modificado. Tras cargarlo, el diagnóstico real detectó ambas bandas y nueve canales de 5 GHz sin `no IR` ni DFS; la activación de un AP y asociación de clientes siguen pendientes. El módulo original permanece intacto y reiniciar revierte la carga experimental.
+La [investigación específica de 5 GHz](5ghz-investigation.md) identifica la Intel 8265, confirma su conexión cliente de 5 GHz y explica la restricción LAR del stack instalado y la prueba temporal de un módulo modificado. Tras cargarlo, el diagnóstico real detectó ambas bandas y nueve canales de 5 GHz sin `no IR` ni DFS; **el intento real de AP de 5 GHz falló con un assert del firmware y error al configurar beacons**. El perfil temporal se eliminó y la conexión cliente se restauró automáticamente. El módulo original permanece intacto; la reversión del módulo en memoria requiere autenticación local o reinicio.
 
 El diagnóstico no encontró una salida distinta de la interfaz del AP y la lectura directa de nftables requería más permisos. Ambas condiciones se informan sin modificar la red ni solicitar autorización desde el diagnóstico.
 
 La salida de Internet se vuelve a detectar durante el uso. La selección del adaptador Wi-Fi se realiza al iniciar el proceso: si se sustituye por otro adaptador con diferente nombre, hay que volver a abrir el panel o seleccionar THINKISP_WLAN antes de ejecutarlo.
 
-No se comprobaron asociación con clientes, concesiones DHCP, navegación, rendimiento, AP de 5/6 GHz, múltiples radios simultáneas ni arquitecturas ARM/aarch64. El resultado indica qué requisitos y capacidades se pudieron consultar; la activación física continúa sin verificar.
+No se comprobaron asociación con clientes, concesiones DHCP, navegación, rendimiento, AP de 6 GHz, múltiples radios simultáneas ni arquitecturas ARM/aarch64. Se intentó activar un AP de 5 GHz con el módulo experimental y falló; las capacidades anunciadas por sí solas no certifican el funcionamiento real.
 
 ## Diagnóstico reproducible
 
@@ -55,6 +65,7 @@ python3 main.py doctor --json
 python3 -m unittest discover -s tests
 python3 tests/integration/nmcli_offline.py
 python3 tests/integration/tui_roundtrip.py
+python3 tests/integration/setup_roundtrip.py
 ```
 
 `doctor` devuelve 1 si hay un requisito básico ausente, rechazado o sin confirmar. Las herramientas opcionales y la falta de TTY se notifican como avisos. La salida JSON mantiene `activation_tested: false` porque el diagnóstico no activa la radio. No consulta contraseñas ni escribe estado.
