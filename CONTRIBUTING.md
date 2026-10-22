@@ -32,7 +32,7 @@ ThinkISP está diseñado intencionalmente con **cero dependencias externas de `p
 
 ### Clonar el Repositorio
 ```bash
-git clone https://github.com/jssi/thinkisp.git
+git clone https://github.com/Yzy-zu/ThinkISP.git
 cd thinkisp
 ```
 

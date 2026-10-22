@@ -140,7 +140,7 @@ thinkisp widget             # Emite JSON para Waybar / QuickShell
 
 ### Instalación Rápida
 ```bash
-git clone https://github.com/tu-usuario/thinkisp.git
+git clone https://github.com/Yzy-zu/ThinkISP.git
 cd thinkisp
 ./install.sh
 ```
