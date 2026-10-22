@@ -43,6 +43,7 @@ cmd_setup = _handler('cmd_setup')
 cmd_recover = _handler('cmd_recover')
 cmd_doctor = _handler('cmd_doctor')
 cmd_network = _handler('cmd_network')
+cmd_portal = _handler('cmd_portal')
 
 
 def build_parser():
@@ -56,6 +57,18 @@ def build_parser():
     doctor = subparsers.add_parser('doctor', help='Diagnóstico de compatibilidad sin modificar la red')
     doctor.add_argument('--json', action='store_true', help='Informe JSON para soporte y automatización')
 
+    portal = subparsers.add_parser('portal', help='Control y estado del portal cautivo (fase 3)')
+    portal.add_argument('--json', action='store_true', help='Informe JSON del estado del portal')
+    portal_commands = portal.add_subparsers(dest='portal_action')
+    portal_status = portal_commands.add_parser('status', help='Estado del portal cautivo y clientes autorizados')
+    portal_status.add_argument('--json', action='store_true', default=argparse.SUPPRESS, help='Informe JSON del estado')
+    portal_commands.add_parser('enable', help='Habilita el portal cautivo para el próximo encendido')
+    portal_commands.add_parser('disable', help='Desactiva el portal cautivo para el próximo encendido')
+    portal_auth = portal_commands.add_parser('authorize', help='Autoriza el acceso a la red de un dispositivo')
+    portal_auth.add_argument('target', help='Dirección IP o MAC a autorizar')
+    portal_revoke = portal_commands.add_parser('revoke', help='Revoca la autorización de acceso de un dispositivo')
+    portal_revoke.add_argument('target', help='Dirección IP o MAC a revocar')
+
     network = subparsers.add_parser('network', help='Inventario y plan de conectividad por perfil (beta, sin aplicar cambios de red)')
     network.add_argument('--json', action='store_true', help='Inventario y plan en JSON')
     network_commands = network.add_subparsers(dest='network_action')
@@ -65,7 +78,7 @@ def build_parser():
     plan.add_argument('--ap', help='Interfaz AP o auto')
     plan.add_argument('--upstream', help='Interfaz de entrada de Internet o auto')
     plan.add_argument('--mode', choices=['auto', 'routed', 'repeater'])
-    plan.add_argument('--engine', choices=['auto', 'none', 'opennds'])
+    plan.add_argument('--engine', choices=['auto', 'none', 'builtin', 'opennds'])
     plan.add_argument('--save', action='store_true', help='Guardar intención por perfil; no aplicar ni activar servicios')
     plan.add_argument('--json', action='store_true', default=argparse.SUPPRESS)
 
@@ -135,6 +148,8 @@ def _main():
 
     if args.command == 'network':
         cmd_network(args)
+    elif args.command == 'portal':
+        cmd_portal(args)
     elif args.command == 'doctor':
         cmd_doctor(args)
     elif args.command in ("setup", "config"):

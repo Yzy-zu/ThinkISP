@@ -20,8 +20,8 @@ class NetworkIntent:
     def validate(self):
         if not isinstance(self.mode, str) or self.mode not in ('auto', 'routed', 'repeater'):
             raise ThinkISPError('Modo de red inválido: usa auto, routed o repeater.')
-        if not isinstance(self.portal_engine, str) or self.portal_engine not in ('auto', 'none', 'opennds'):
-            raise ThinkISPError('Motor inválido: usa auto, none u opennds.')
+        if not isinstance(self.portal_engine, str) or self.portal_engine not in ('auto', 'none', 'opennds', 'builtin'):
+            raise ThinkISPError('Motor inválido: usa auto, none, opennds o builtin.')
         for value in (self.ap_interface, self.upstream_interface):
             if value is not None and (not isinstance(value, str) or not value or len(value.encode()) > 15
                                       or re.search(r'[\s/:\x00-\x1f\x7f]', value)):
@@ -167,11 +167,12 @@ def collect_inventory():
                 routes.extend(parse_routes(raw, family))
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
                 errors.append({'tool': 'ip', 'detail': f'Rutas IPv{family} sin confirmar: {exc}'})
+    dependencies = {name: bool(shutil.which(name)) for name in ('nmcli', 'iw', 'ip', 'nft', 'dnsmasq', 'ss')}
     # Inventory only: discovering a binary is not proof its runtime is integrated.
     engines = {'none': {'installed': True, 'runtime_implemented': True},
+               'builtin': {'installed': bool(dependencies['nft']), 'runtime_implemented': True},
                'opennds': {'installed': bool(shutil.which('opennds')),
                            'control_installed': bool(shutil.which('ndsctl')), 'runtime_implemented': False}}
-    dependencies = {name: bool(shutil.which(name)) for name in ('nmcli', 'iw', 'ip', 'nft', 'dnsmasq', 'ss')}
     tables = query(['nft', '-j', 'list', 'tables']) if dependencies['nft'] else None
     firewall = {'status': 'unverified', 'table_count': None}
     if tables is not None:
@@ -254,20 +255,28 @@ def evaluate_plan(inventory, intent, fallback_ap=None):
         issue('repeater_activation_unverified', 'warning', 'Concurrencia anunciada; activar un AP virtual requiere permisos y aceptación real del firmware.')
     engine = intent.portal_engine
     if engine == 'auto':
-        engine = 'opennds' if inventory['engines'].get('opennds', {}).get('installed') else 'none'
-    if engine == 'opennds':
+        if inventory['engines'].get('builtin', {}).get('installed'):
+            engine = 'builtin'
+        elif inventory['engines'].get('opennds', {}).get('installed'):
+            engine = 'opennds'
+        else:
+            engine = 'none'
+    if engine == 'builtin':
+        if not inventory.get('dependencies', {}).get('nft'):
+            issue('portal_firewall_missing', 'warning', 'Falta nftables para preparar el control de acceso del portal.')
+    elif engine == 'opennds':
         if not inventory['engines'].get('opennds', {}).get('installed'):
             issue('portal_dependency_missing', 'warning', 'openNDS no está instalado; será una dependencia opcional del portal.')
         if not inventory['dependencies'].get('nft'):
             issue('portal_firewall_missing', 'warning', 'Falta nftables para preparar el control de acceso del portal.')
         if not inventory['engines'].get('opennds', {}).get('control_installed'):
             issue('portal_control_missing', 'warning', 'No se encontró ndsctl; control de openNDS sin confirmar.')
-        issue('portal_runtime_pending', 'warning', 'Motor identificado; su integración y autorización de clientes corresponden a fase 3.')
+        issue('portal_runtime_pending', 'warning', 'openNDS identificado; su adaptador no está implementado. El motor Integrado está disponible con nftables.')
     if inventory['firewall']['status'] == 'unverified':
         issue('firewall_unverified', 'warning', 'No se pudo consultar nftables; compatibilidad de reglas sin verificar.')
     elif inventory['firewall']['table_count']:
         issue('firewall_existing', 'warning', 'Hay tablas nftables existentes; deben conservarse y comprobarse al integrar el portal.')
-    return {'schema_version': 1, 'phase': 2, 'intent': intent.to_dict(),
+    return {'schema_version': 1, 'phase': 3, 'intent': intent.to_dict(),
             'selected': {'ap_interface': ap_name, 'upstream_interface': upstream_name, 'mode': mode, 'portal_engine': engine},
             'concurrency': concurrency, 'issues': issues, 'configuration_valid': not any(i['level'] == 'error' for i in issues),
             'activation_tested': False, 'portal_enabled': False, 'applied': False, 'internet_verified': False}

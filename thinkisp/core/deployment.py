@@ -53,7 +53,9 @@ def inspect_deployment(intent=None):
     plan = evaluate_plan(inventory, intent, fallback_ap=config.WLAN_IFACE)
     runtime = load_state().get('connectivity_runtime', {})
     runtime = runtime if runtime.get('owner') == profile else {}
-    return {'runtime': {key: runtime[key] for key in ('phase', 'ap_interface', 'upstream_interface', 'mode') if key in runtime}, 'schema_version': 1, 'profile_uuid': profile, 'profile_name': config.HOTSPOT_CONN,
+    from thinkisp.core import portal
+    portal_state = portal.status(profile) if profile else {'enabled': False, 'phase': 'disabled'}
+    return {'portal': portal_state, 'runtime': {key: runtime[key] for key in ('phase', 'ap_interface', 'upstream_interface', 'mode') if key in runtime}, 'schema_version': 1, 'profile_uuid': profile, 'profile_name': config.HOTSPOT_CONN,
             'saved_intent': saved.to_dict(), 'inventory': inventory, 'plan': plan, 'profile_error': profile_error}
 
 
@@ -75,7 +77,7 @@ def report_lines(report):
              f"AP: {selected['ap_interface'] or 'Sin detectar'}",
              f"Entrada de Internet: {selected['upstream_interface'] or 'Sin detectar'}",
              f"Topología: {selected['mode']}", f"Motor previsto: {selected['portal_engine']}",
-             f"Ejecución: {report.get('runtime', {}).get('phase', 'sin aplicar')}. Se aplica al encender. Portal desactivado.", '', 'Interfaces detectadas:']
+             f"Ejecución: {report.get('runtime', {}).get('phase', 'sin aplicar')}. Portal: {report.get('portal', {}).get('phase', 'disabled')}.", '', 'Interfaces detectadas:']
     for device in report['inventory']['devices']:
         lines.append(f"  {device['name']} · {device['kind']} · {device['state']} · bus {device['bus']}" +
                      (f" · {device['phy']}" if device.get('phy') else ''))

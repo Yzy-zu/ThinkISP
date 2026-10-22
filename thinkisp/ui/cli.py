@@ -189,10 +189,53 @@ def cmd_status(args):
     print(f"Zona de firewall del perfil: {data['firewall']}")
     print(f"IPv4 forwarding: {'Activo' if get_ip_forward_status() else 'Inactivo'}")
     print(f"Salida: {eth['interface'] or 'No detectada'} · {'Conectada' if eth['connected'] else 'Desconectada'} · {eth['speed']}")
+    try:
+        from thinkisp.core import portal
+        portal_state = portal.status()
+        if portal_state['enabled'] or portal_state['phase'] not in ('disabled', 'configured'):
+            print(f"Portal: {portal_state['phase']}" + (f" · {portal_state['url']}" if portal_state['url'] else ''))
+        if portal_state['diagnostic']:
+            print('Portal sin confirmar: ' + portal_state['diagnostic'])
+    except ThinkISPError as exc:
+        print(f'Portal sin confirmar: {exc}')
     if active and ap_interface(WLAN_IFACE):
         qdiscs = run_cmd(['tc', 'qdisc', 'show', 'dev', ap_interface(WLAN_IFACE)])
         print(f"Colas aplicadas: {qdiscs or 'Sin datos'}")
         cmd_clients(args)
+
+
+def cmd_portal(args):
+    """Configure next startup or manage a running owned portal."""
+    from thinkisp.core import portal
+    from thinkisp.core.profile import profile_uuid
+    owner = profile_uuid()
+    action = getattr(args, 'portal_action', None) or 'status'
+    if action == 'status':
+        report = portal.status(owner)
+        if getattr(args, 'json', False):
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+            return
+        labels = {'disabled': 'Desactivado', 'configured': 'Habilitado para el próximo encendido',
+                  'preparing': 'Iniciando', 'prepared': 'Preparado', 'running': 'Activo',
+                  'recovering': 'Recuperando', 'recovery_pending': 'Recuperación pendiente'}
+        print('thinkISP · Portal cautivo')
+        print('Estado: ' + labels.get(report['phase'], report['phase']))
+        if report['url']:
+            print('Portal: ' + report['url'])
+        clients = [c for c in report['clients'] if c['authorized']]
+        print(f'Clientes autorizados: {len(clients)}')
+        for client in clients:
+            print(f"  {client['ip']} · {client['mac']}")
+        if report['diagnostic']:
+            print('Diagnóstico: ' + report['diagnostic'])
+        if owner is None:
+            print('Configura primero el AP con thinkisp setup.')
+    elif action in ('enable', 'disable'):
+        portal.configure(owner, action == 'enable')
+        print('Portal ' + ('habilitado' if action == 'enable' else 'desactivado') + '; se aplicará al próximo encendido.')
+    elif action in ('authorize', 'revoke'):
+        print(_checked(getattr(portal, action)(owner, args.target)))
+
 
 
 def cmd_clients(args):

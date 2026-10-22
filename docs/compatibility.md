@@ -17,6 +17,7 @@ Revisión del 22 de octubre de 2026. Las pruebas automatizadas no activaron un h
 | Bloqueo por MAC | `nft`, JSON y soporte del kernel para tabla netdev y hook ingress. Requiere CAP_NET_ADMIN o autorización PolicyKit; `pkexec` no es obligatorio para el AP básico. |
 | CAKE/TBF | Soporte del kernel y de NetworkManager para la cola elegida. `tc` comprueba la cola aplicada; una aceptación offline no confirma que el módulo del kernel esté disponible. |
 | Plan de conectividad | Inventario y preferencias por UUID; modos routed/repeater y motor previsto. La fase 2 aplica el plan al encender, con AP virtual si hace falta, rutas propias y recuperación. La concurrencia anunciada no certifica activación real; consulta [límites de fase 2](portal-roadmap.md). |
+| Portal integrado | nftables, iproute2, Linux con sockets Unix y credenciales, `fork`, y root o `pkexec` con agente PolicyKit. Requiere plan por perfil y conexión automática del AP desactivada. HTTP sin privilegios; sin interceptar HTTPS. Las plantillas y duraciones configurables siguen pendientes. |
 | Panel | Módulo curses de Python, entrada/salida TTY, locale UTF-8 y TERM válido. Tamaño mínimo 76×24. La selección también se distingue sin color. Sin TTY se usan comandos CLI. |
 | Diagnósticos y extras | `dig` para comparar DNS, `curl` para transferencia, `qrencode` para QR, `ethtool` para velocidad del enlace y `notify-send` para notificaciones. Su ausencia sólo afecta a la función correspondiente. |
 
@@ -26,11 +27,12 @@ El requisito `--offline` está documentado por el [anuncio oficial de NetworkMan
 
 | Comprobación | Resultado |
 | --- | --- |
-| Suite en seis versiones reales de Python, 3.9–3.14 | 304 pruebas aprobadas por versión. |
+| Suite en seis versiones reales de Python, 3.9–3.14 | 401 pruebas aprobadas por versión, incluido el portal de fase 3. |
 | Curses real en pseudoterminal, en las seis versiones | Color real de curses y paleta de acciones con búsqueda, cinco vistas con teclas de función, configuración integrada, temporizador, límites, bloqueados, DNS, resultado tardío de un trabajo, redimensionamiento a 80×24 y salida limpia aprobados. Datos de red simulados. |
 | Formulario de configuración curses real, Python 3.9–3.14 | Edición de SSID Unicode, contraseña oculta y confirmada, selección con flechas de banda/canal, pestañas, F2 y redimensionamiento a 80×24 aprobados. Guardado simulado, sin modificar la red. |
 | Parser offline instalado: nmcli 1.58.1 | Formulario completo con canal automático en banda automática/2.4/5 GHz, reinicio de canal fijo a automático, SSID Unicode, seguridad, visibilidad, ahorro de energía, MTU, PMF, aislamiento, DHCP, DNS en perfil de salida, CAKE/TBF y propiedades opcionales aprobados. Ningún perfil real creado. |
 | Rutas de fase 2 en kernel Linux aislado | Salida elegida, bloqueo de fallback al eliminarla, limpieza propia y otra WAN conservada. Interfaces ficticias; no se tocó la red del equipo. |
+| Portal en kernel y supervisor aislados | HTTP sin root, redirección, token de un uso, autorización y revocación, corte de TCP establecido, IPv6 bloqueado, vencimiento sin refresco, caída de HTTP y recuperación conservando tablas ajenas. Sin activar radios ni DHCP reales. |
 | Wheel, Python 3.14 | Construcción e instalación en venv temporal; módulos y entry points `thinkisp` e `isp` verificados sin descargar dependencias. |
 | Instalador | Rutas con espacios, comillas, `$`, `&`, `|` y `%`; lanzadores y completados en directorios de usuario temporales. Desktop Entry validado. |
 | Shell | Sintaxis de Bash y Fish verificada localmente. Zsh queda incluido en la matriz de CI. |
@@ -78,3 +80,5 @@ python3 tests/integration/package_roundtrip.py
 ```
 
 Las pruebas de nftables con tráfico IPv4/IPv6 en redes virtuales tienen su procedimiento en el README; no forman parte del diagnóstico sobre las interfaces reales.
+
+El portal de fase 3 también se recorre en la prueba de pseudoterminal. Su apertura automática en cada sistema cliente, DHCP y navegación mediante un AP físico siguen pendientes. Los comandos de integración aislada y sus requisitos se describen en [la hoja de ruta](portal-roadmap.md#validación-reproducible).

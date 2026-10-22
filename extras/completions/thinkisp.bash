@@ -21,7 +21,7 @@ _thinkisp_completions() {
         cword=$COMP_CWORD
     fi
 
-    local commands="network doctor setup config on off recover boost status clients speed top stats widget kick unkick blocked stealth timer gaming limit adblock dns qr band toggle tui"
+    local commands="portal network doctor setup config on off recover boost status clients speed top stats widget kick unkick blocked stealth timer gaming limit adblock dns qr band toggle tui"
     local global_flags="-h --help"
 
     # Nivel 1: Subcomandos u opciones globales
@@ -38,10 +38,34 @@ _thinkisp_completions() {
     local cmd="${words[1]}"
 
     case "$cmd" in
+        portal)
+            case "$prev" in
+                authorize)
+                    local clients=""
+                    if command -v thinkisp &>/dev/null; then
+                        clients=$(thinkisp clients 2>/dev/null | awk '/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/ {for(i=1;i<=NF;i++) if($i ~ /^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$/ || $i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) print $i}')
+                    fi
+                    COMPREPLY=($(compgen -W "$clients" -- "$cur"))
+                    ;;
+                revoke)
+                    local clients=""
+                    if command -v thinkisp &>/dev/null; then
+                        clients=$(thinkisp portal status --json 2>/dev/null | grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}|[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
+                    fi
+                    COMPREPLY=($(compgen -W "$clients" -- "$cur"))
+                    ;;
+                status)
+                    COMPREPLY=($(compgen -W "--json --help" -- "$cur"))
+                    ;;
+                *)
+                    COMPREPLY=($(compgen -W "status enable disable authorize revoke --json --help" -- "$cur"))
+                    ;;
+            esac
+            ;;
         network)
             case "$prev" in
                 --mode) COMPREPLY=($(compgen -W "auto routed repeater" -- "$cur")) ;;
-                --engine) COMPREPLY=($(compgen -W "auto none opennds" -- "$cur")) ;;
+                --engine) COMPREPLY=($(compgen -W "auto none builtin opennds" -- "$cur")) ;;
                 --ap|--upstream) COMPREPLY=($(compgen -W "auto" -- "$cur")) ;;
                 *) COMPREPLY=($(compgen -W "inspect plan --ap --upstream --mode --engine --save --json --help" -- "$cur")) ;;
             esac

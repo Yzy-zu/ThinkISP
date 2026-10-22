@@ -256,6 +256,8 @@ class HotspotWatcher:
         from thinkisp.core.connectivity import health_check
         try:
             health_check()
+            from thinkisp.core import portal
+            portal.health_check()
         except ThinkISPError as exc:
             stop_hotspot()
             notify('thinkISP · Entrada desconectada', str(exc), urgency='critical')

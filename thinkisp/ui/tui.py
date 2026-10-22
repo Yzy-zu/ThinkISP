@@ -116,12 +116,13 @@ BUTTON_DEFS = [
 PAGES = [
     ('Resumen', ('toggle', 'config', 'qr')),
     ('Dispositivos', ('qr', 'access', 'blocked')),
-    ('Red', ('config', 'toggle', 'stealth', 'timer', 'qr', 'network_plan')),
+    ('Red', ('config', 'toggle', 'stealth', 'timer', 'qr', 'network_plan', 'portal')),
     ('Rendimiento', ('gaming', 'limit', 'speed', 'boost')),
     ('DNS', ('dns', 'adblock', 'restore_dns')),
 ]
 BUTTON_DEFS += [
-    {'id': 'network_plan', 'label': 'Conectividad', 'hotkey': 'N', 'hint': 'Plan por perfil: AP, entrada de Internet, repetidor y motor del portal (fase 1)'},
+    {'id': 'portal', 'label': 'Portal', 'hotkey': 'V', 'hint': 'Control del portal cautivo y autorización de clientes'},
+    {'id': 'network_plan', 'label': 'Conectividad', 'hotkey': 'N', 'hint': 'Plan por perfil: AP, entrada de Internet, repetidor y motor del portal'},
     {'id': 'access', 'label': 'Ver dispositivo', 'hotkey': 'K', 'hint': 'Abrir detalles y controlar el acceso del dispositivo seleccionado'},
     {'id': 'blocked', 'label': 'Bloqueados', 'hotkey': 'U', 'hint': 'Ver y permitir acceso a dispositivos bloqueados, aunque estén desconectados'},
     {'id': 'restore_dns', 'label': 'Restaurar DNS', 'hotkey': 'E', 'hint': 'Recuperar la configuración DNS anterior de la salida'},
@@ -932,6 +933,7 @@ def render_help_modal(win, state, max_y, max_x):
         ('Enter', 'Abrir acción o ver dispositivo'),
         ('/ / Ctrl+P', 'Buscar cualquier acción por nombre'),
         ('O', 'Encender o apagar el punto de acceso'),
+        ('V', 'Portal cautivo: estado, autorizaciones y clientes'),
         ('C / N', 'Configurar red / plan de conectividad'),
         ('R', 'Ver credenciales y código QR'),
         ('T', 'Programar apagado'),
@@ -1080,6 +1082,21 @@ def _execute_button_action(btn_id, state):
                    lambda: {'clients': get_blocked_clients(), 'selected_idx': 0})
     elif btn_id == 'restore_dns':
         submit_action(state, 'Restaurando DNS anterior', lambda: checked_result(set_dns_provider('restore')))
+    elif btn_id == 'portal':
+        from thinkisp.ui.portal import manage_portal
+        if state.tasks:
+            state.tasks.pause(True)
+        try:
+            manage_portal(screen=state.screen)
+        finally:
+            if state.screen is not None:
+                state.screen.timeout(100)
+                state.screen.keypad(True)
+                state.screen.clear()
+                init_colors()
+                theme.background(state.screen)
+            if state.tasks:
+                state.tasks.pause(False)
     elif btn_id == 'network_plan':
         from thinkisp.ui.connectivity import configure_connectivity
         if state.tasks:
@@ -1353,6 +1370,7 @@ def handle_keypress(ch, state, max_x):
         ord('d'): "dns", ord('D'): "dns",
         ord('p'): "speed", ord('P'): "speed",
         ord('r'): "qr", ord('R'): "qr",
+        ord('v'): "portal", ord('V'): "portal",
         ord('o'): "toggle", ord('O'): "toggle",
         ord('?'): "help", ord('h'): "help", ord('H'): "help",
         ord('q'): "quit", ord('Q'): "quit",

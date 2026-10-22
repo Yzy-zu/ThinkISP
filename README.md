@@ -1,6 +1,6 @@
 # thinkISP
 
-**Versión 0.1.0b2 · beta.** Portal cautivo en desarrollo por fases.
+**Versión 0.1.0b3 · beta.** Portal cautivo en desarrollo por fases.
 Gestor de puntos de acceso para Linux. Permite configurar una red doméstica con las capacidades que el adaptador Wi-Fi y NetworkManager exponen en cada equipo.
 
 El programa detecta las interfaces del sistema y consulta al controlador sus canales, restricciones regulatorias y límites de potencia. No presupone una marca de computadora, un SSID, una contraseña, un canal ni una velocidad de enlace.
@@ -37,7 +37,7 @@ python3 main.py doctor --json
 
 El informe distingue herramientas obligatorias, funciones opcionales y comprobaciones pendientes. No modifica perfiles, DNS, firewall o regulación, no solicita autorización y no consulta contraseñas. Una interfaz o un parser disponible no certifican una conexión Wi-Fi real. Consulta el [informe de compatibilidad y pruebas ejecutadas](docs/compatibility.md).
 
-## Conectividad · fase 2 y portal previsto
+## Conectividad y portal cautivo · fase 3
 
 El panel **F3 Red → Conectividad** (**N**) permite preparar por perfil la interfaz AP, entrada de Internet, topología y motor previsto del portal. El inventario distingue Ethernet/USB, otras radios Wi-Fi y concurrencia cliente/AP sobre una misma radio según lo anunciado por cada controlador.
 
@@ -47,13 +47,28 @@ thinkisp network inspect --json
 thinkisp network plan --mode auto --engine auto
 ```
 
-`network plan` admite `--ap`, `--upstream`, `--mode auto|routed|repeater`, `--engine auto|none|opennds` y `--save`. Guardar registra la intención por UUID del perfil AP existente. **Se aplica al siguiente encendido** desde el panel o con `thinkisp on`; guardar e inspeccionar no cambian la red activa. `thinkisp off` retira los recursos creados y restaura los ajustes previos; `thinkisp recover` reintenta una recuperación pendiente con el AP apagado. Si falta una herramienta o permiso, el informe identifica lo que no se pudo verificar.
+`network plan` admite `--ap`, `--upstream`, `--mode auto|routed|repeater`, `--engine auto|none|builtin|opennds` y `--save`. Guardar registra la intención por UUID del perfil AP existente. **Se aplica al siguiente encendido** desde el panel o con `thinkisp on`; guardar e inspeccionar no cambian la red activa. `thinkisp off` retira los recursos creados y restaura los ajustes previos; `thinkisp recover` reintenta una recuperación pendiente con el AP apagado. Si falta una herramienta o permiso, el informe identifica lo que no se pudo verificar.
 
 La fase 2 selecciona la salida IPv4, evita subredes solapadas y crea una interfaz AP virtual cuando entrada y AP comparten interfaz. Requiere concurrencia anunciada y permisos de administración de red; respeta los canales autorizados por el sistema y comparte canal cuando lo exige la radio. No cambia la ruta predeterminada del equipo. Si la entrada desaparece, las rutas de clientes impiden pasar a otra WAN; el vigilante apaga el AP ante cambios de conexión o canal. Durante una sesión hay que apagar la zona antes de editar el perfil o el plan.
 
-La asociación y navegación con hardware real siguen pendientes de validación. Se requiere una salida con dirección y ruta predeterminada IPv4 gestionada por NetworkManager; una entrada exclusivamente IPv6 no está soportada en esta fase. El AP del plan usa IPv4 y desactiva IPv6 temporalmente. El motor de portal todavía no se inicia.
+La asociación y navegación con hardware real siguen pendientes de validación. Se requiere una salida con dirección y ruta predeterminada IPv4 gestionada por NetworkManager; una entrada exclusivamente IPv6 no está soportada en esta fase. El AP del plan usa IPv4 y desactiva IPv6 temporalmente.
 
-Las siguientes fases añaden motor de acceso, sesiones configurables y plantillas de términos, registro, anuncio o HTML/CSS/JS propios. El [alcance y la hoja de ruta](docs/portal-roadmap.md) distinguen lo implementado de lo pendiente.
+El portal integrado se activa explícitamente por perfil, con el AP apagado y un plan de conectividad guardado. También está en **F3 Red → Portal cautivo** (**V**); **O** conserva encender/apagar la zona.
+
+```bash
+thinkisp portal enable
+thinkisp on
+thinkisp portal status
+thinkisp portal status --json
+thinkisp portal authorize IP_O_MAC
+thinkisp portal revoke IP_O_MAC
+thinkisp off
+thinkisp portal disable
+```
+
+`IP_O_MAC` es la dirección de un dispositivo de esa red. El portal muestra el SSID del perfil y un botón **Continuar**: hasta autorizar, restringe Internet y redirige HTTP a su página local. Requiere `nft`, `ip`, NetworkManager y permisos mediante `pkexec` con agente PolicyKit o ejecución como root. El servidor web funciona sin privilegios. No intercepta HTTPS. El inicio rechaza perfiles con conexión automática habilitada y reglas de aceleración de flujos que puedan saltarse el filtro. Cambiar el motor previsto no habilita el portal; openNDS se inventaría, pero su ejecución no está integrada.
+
+Se probaron redirección, autorización, revocación y cierre ante caída del servidor dentro de redes aisladas. La aparición automática del portal en cada sistema, la asociación Wi-Fi y DHCP reales siguen pendientes de pruebas físicas. Las siguientes fases añaden sesiones configurables y plantillas de términos, registro, anuncio o HTML/CSS/JS propios. El [alcance y la hoja de ruta](docs/portal-roadmap.md) distinguen lo implementado de lo pendiente.
 
 ## Primera ejecución y configuración
 

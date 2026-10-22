@@ -132,6 +132,14 @@ for cmd in thinkisp isp
     complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l ap -r
     complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l upstream -r
     complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l mode -r -a "auto routed repeater"
-    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l engine -r -a "auto none opennds"
+    complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l engine -r -a "auto none builtin opennds"
     complete -c $cmd -n "__fish_seen_subcommand_from network; and __fish_seen_subcommand_from plan" -l save
+end
+
+for cmd in thinkisp isp
+    complete -c $cmd -n "__fish_use_subcommand" -a portal -d "Control y estado del portal cautivo"
+    complete -c $cmd -n "__fish_seen_subcommand_from portal" -a "status enable disable authorize revoke"
+    complete -c $cmd -n "__fish_seen_subcommand_from portal" -l json -d "Informe JSON"
+    complete -c $cmd -n "__fish_seen_subcommand_from portal; and __fish_seen_subcommand_from authorize" -a "(__thinkisp_connected_clients)" -d "Dispositivo a autorizar"
+    complete -c $cmd -n "__fish_seen_subcommand_from portal; and __fish_seen_subcommand_from revoke" -a "(__thinkisp_connected_clients)" -d "Dispositivo a revocar"
 end

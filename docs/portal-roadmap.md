@@ -6,7 +6,7 @@ El proyecto es general: no se condiciona a un modelo de PC, interfaz, país ni d
 | --- | --- | --- |
 | 1 | Inventario, separación AP/entrada/motor y plan por perfil | Implementada; guarda intención sin aplicarla |
 | 2 | Conectividad Ethernet/USB/otra radio y repetidor de una radio cuando sea compatible | Implementada en beta; validación física pendiente |
-| 3 | Motor de portal: acceso restringido, página, autorización y revocación | Pendiente |
+| 3 | Motor de portal: acceso restringido, página, autorización y revocación | Implementada en beta; validación física pendiente |
 | 4 | Sesiones: minutos, horas, días, sin vencimiento y políticas de reconexión | Pendiente |
 | 5 | Plantillas de términos, registro y anuncio; condiciones configurables | Pendiente |
 | 6 | Importación HTML/CSS/JS, recursos locales, API y vista previa | Pendiente |
@@ -38,9 +38,9 @@ Para guardar el último ejemplo, añade `--save`. `INTERFAZ_AP` e `INTERFAZ_ENTR
 
 El editor interactivo está en **F3 Red → Conectividad**, acceso rápido **N**, y en la paleta `/` buscando conectividad. Permite elegir interfaces, topología y motor, consultar restricciones y guardar el plan. No cambia la red activa.
 
-Guardar requiere un perfil AP ya creado con `thinkisp setup`. La intención se almacena por UUID en `network_profiles` dentro del estado privado existente, con versión de esquema. No almacena contraseñas. Guardar no modifica conexiones de NetworkManager. A partir de fase 2, el siguiente encendido aplica el plan guardado y mantiene el portal desactivado. Sin un plan guardado se conserva el arranque básico anterior.
+Guardar requiere un perfil AP ya creado con `thinkisp setup`. La intención se almacena por UUID en `network_profiles` dentro del estado privado existente, con versión de esquema. No almacena contraseñas. Guardar no modifica conexiones de NetworkManager. A partir de fase 2, el siguiente encendido aplica el plan guardado y mantiene el portal desactivado salvo habilitación explícita de fase 3. Sin un plan guardado se conserva el arranque básico anterior.
 
-El motor previsto puede ser `none`, `opennds` o `auto`. openNDS se detecta como candidato opcional; su adaptación operativa es fase 3. El motor no se descarga, habilita ni ejecuta en fase 1.
+El motor previsto puede ser `none`, `builtin`, `opennds` o `auto`. La fase 3 integra `builtin`; openNDS sólo se detecta como candidato opcional y su adaptación operativa sigue pendiente. El motor no se descarga, habilita ni ejecuta en fase 1.
 
 ## Validación
 
@@ -63,4 +63,30 @@ Las rutas por origen/interfaz limitan a los clientes a la entrada elegida, con p
 
 Los cambios del perfil son temporales en NetworkManager. El registro `connectivity_runtime` guarda UUID propietario, propiedades originales, identidad de interfaz virtual y recursos de rutas. El apagado restaura el perfil y retira sólo los recursos identificados como propios. Si un recurso o perfil cambió externamente, la recuperación conserva el registro y explica el conflicto. Las operaciones se serializan con un bloqueo entre procesos. Los cambios del perfil, QoS y plan se realizan con la zona apagada para evitar persistir valores de sesión.
 
-La prueba de integración crea exclusivamente interfaces ficticias dentro de un user/network namespace vacío. Verifica selección real de salida, cierre al eliminarla y conservación de otra WAN. Las pruebas de transacción simulan rechazo del controlador, fallos de rutas, cambios externos y recuperación. Esto no certifica asociación Wi-Fi, DHCP ni navegación con hardware real; esa validación sigue pendiente. El portal y sus plantillas pertenecen a las fases 3 y posteriores.
+La prueba de integración crea exclusivamente interfaces ficticias dentro de un user/network namespace vacío. Verifica selección real de salida, cierre al eliminarla y conservación de otra WAN. Las pruebas de transacción simulan rechazo del controlador, fallos de rutas, cambios externos y recuperación. Esto no certifica asociación Wi-Fi, DHCP ni navegación con hardware real; esa validación sigue pendiente. El motor integrado se describe a continuación; las plantillas siguen pendientes.
+
+
+## Ejecución de fase 3
+
+Con el AP apagado y un plan guardado, ejecuta `thinkisp portal enable` o utiliza **F3 Red → Portal cautivo (V)**. Habilitar selecciona el motor integrado para ese perfil; guardar solamente un motor en Conectividad no habilita el portal. El siguiente `thinkisp on` instala el filtro antes de activar el AP. Los perfiles nuevos ya deshabilitan la conexión automática; si se cambió externamente, debe volver a `connection.autoconnect=no` para usar el portal. Las activaciones hechas fuera de thinkISP no forman parte del arranque supervisado.
+
+`thinkisp portal status --json` informa configuración, fase, diagnóstico, URL real y autorizaciones confirmadas. El panel permite autorizar o revocar dispositivos con `thinkisp portal authorize IP_O_MAC` y `thinkisp portal revoke IP_O_MAC` como equivalentes CLI. Autorizar requiere un vecino IPv4/MAC observado sobre la interfaz AP; no se concede acceso por una dirección arbitraria. Revocar corta también tráfico establecido y permite volver a pasar por la página. El bloqueo MAC existente sigue teniendo prioridad sobre la autorización.
+
+El motor usa nftables y procesos locales de Python, sin instalar servicios externos. Requiere Linux, `nmcli`, `ip`, `nft` y elevación por PolicyKit o root. El supervisor administra únicamente su tabla identificada y un socket privado con verificación de credenciales; el servidor HTTP se ejecuta sin privilegios y no tiene acceso a comandos de administración. El título se obtiene del SSID del perfil, la interfaz y el gateway de la sesión. No se configura ningún modelo de PC ni gateway fijo.
+
+Antes de autorizar se permite DHCP/DNS del gateway y la página local, se redirige HTTP y se bloquea el resto del tráfico del AP, incluido IPv6. No se intercepta HTTPS. El formulario usa un token de un solo uso ligado al cliente observado; la identidad IP/MAC no equivale a una cuenta de usuario ni impide suplantación en una red hostil. La página actual contiene únicamente el botón Continuar; términos, registro, anuncios y contenido personalizado siguen en fases posteriores.
+
+Las autorizaciones son de la sesión actual. Se conservan mientras el supervisor compruebe salud e identidad; las concesiones del kernel se refrescan cada tres segundos y vencen a los quince si el supervisor desaparece. Estos quince segundos son una medida de recuperación, no una duración de acceso elegida por el administrador. La política de minutos/horas/días/sin vencimiento pertenece a fase 4.
+
+Ante caída del HTTP se retiran las autorizaciones y el vigilante solicita apagar el AP. El filtro permanece si no se puede confirmar el apagado; `thinkisp recover` recupera únicamente recursos propios con el AP apagado. No se borran tablas ajenas. Se rechazan reglas de flow offload detectadas, porque podrían eludir la revocación. Otros firewalls pueden restringir más el tráfico; no se garantiza coexistencia con cualquier regla externa o cambio concurrente.
+
+### Validación reproducible
+
+Las pruebas unitarias simulan equipos y perfiles independientes. La prueba PTY recorre el portal real de curses con datos simulados. Las siguientes integraciones se niegan a ejecutarse si no reciben un user/network namespace vacío, antes de crear recursos:
+
+```bash
+unshare --user --map-root-user --net python3 tests/integration/portal_firewall_roundtrip.py
+unshare --user --map-auto --map-root-user --setgroups allow --net python3 tests/integration/portal_roundtrip.py
+```
+
+La segunda requiere `newuidmap`, `newgidmap` y un rango de UID/GID subordinados que incluya el usuario sin privilegios del namespace. Comprueba el supervisor, HTTP sin root, redirección, token de un uso, autorización/revocación, caída del proceso web, rechazo de limpieza con AP activo y preservación de reglas ajenas. Únicamente simula la observación de NetworkManager sobre el encendido/apagado; no activa hardware. La primera prueba usa nftables reales, comprueba IPv4/IPv6, redirección, corte de una conexión establecida y vencimiento sin refresco. No certifican asociación Wi-Fi, DHCP real ni apertura automática del portal en Android/iOS/Windows: fase 8 sigue pendiente.

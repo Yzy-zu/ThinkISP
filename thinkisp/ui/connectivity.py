@@ -47,8 +47,8 @@ def configure_connectivity(screen=None):
                         options = [('auto', 'Detectar topología'), ('routed', 'Interfaces separadas · Ethernet, USB u otra radio'),
                                    ('repeater', 'Una radio compartida · requiere concurrencia cliente/AP')]
                     elif choice == 'engine':
-                        options = [('auto', 'Detectar motor instalado'), ('none', 'Sin portal'),
-                                   ('opennds', 'openNDS · integración pendiente de fase 3')]
+                        options = [('auto', 'Detectar motor instalado'), ('none', 'Sin portal'), ('builtin', 'Integrado · nftables'),
+                                   ('opennds', 'openNDS · adaptador no implementado')]
                     key = {'ap':'ap_interface', 'upstream':'upstream_interface', 'mode':'mode', 'engine':'portal_engine'}[choice]
                     current = intent.to_dict()[key]
                     value = ui.choose('Seleccionar ' + choice, options, current or 'auto')

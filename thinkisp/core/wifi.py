@@ -194,9 +194,10 @@ def apply_zero_latency_optimizations():
 
 
 def start_hotspot():
-    from thinkisp.core import connectivity
+    from thinkisp.core import connectivity, portal
     owner = profile_uuid()
     state = load_state()
+    portal.preflight(owner)
     current = connectivity.journal()
     if current.get('phase', 'idle') != 'idle' and current.get('owner') != owner:
         raise ThinkISPError('Hay una sesión de otro perfil; apágala o recupérala antes de continuar.')
@@ -207,17 +208,25 @@ def start_hotspot():
         if is_hotspot_active(check=True):
             if current.get('owner') != owner or current.get('phase') != 'running':
                 raise ThinkISPError('El AP está activo fuera del plan guardado. Apágalo antes de aplicar conectividad.')
+            if portal.settings(owner)['enabled']:
+                if portal.journal().get('phase') != 'running':
+                    raise ThinkISPError('El AP está activo sin el portal previsto; apágalo antes de continuar.')
+                portal.health_check(owner)
             return _start_hotspot_legacy()
         if current and current.get('phase') != 'idle':
-            connectivity.cleanup(owner)
+            errors = _cleanup_session(owner)
+            if errors:
+                raise ThinkISPError('; '.join(errors))
         if state.get('pending_start'):
             errors = _cleanup_session(owner)
             if errors:
                 raise ThinkISPError('; '.join(errors))
-        connectivity.prepare(owner)
+        prepared = connectivity.prepare(owner)
         try:
+            portal.prepare(owner, prepared)
             result = _start_hotspot_legacy(announce=False)
             connectivity.confirm(owner)
+            portal.confirm(owner) if portal.settings(owner)['enabled'] else None
             notify("thinkISP · Zona Wi-Fi activada", f"Interfaz: {ap_interface(WLAN_IFACE)}", icon="network-wireless-hotspot")
             return result
         except (ThinkISPError, OSError) as exc:
@@ -384,9 +393,17 @@ def _cleanup_session(profile, clear_firewall=True):
                 save_state(state)
     except ThinkISPError as exc:
         errors.append(str(exc))
+    portal_recovered = True
+    try:
+        from thinkisp.core import portal
+        portal.cleanup(profile)
+    except ThinkISPError as exc:
+        portal_recovered = False
+        errors.append(str(exc))
     try:
         from thinkisp.core.connectivity import cleanup
-        cleanup(profile)
+        if portal_recovered:
+            cleanup(profile)
     except ThinkISPError as exc:
         errors.append(str(exc))
     return errors
@@ -484,7 +501,8 @@ def _serialized_cleanup(operation):
     @wraps(operation)
     def wrapped(*args, **kwargs):
         from thinkisp.core import connectivity
-        if connectivity.journal().get('phase', 'idle') != 'idle':
+        from thinkisp.core import portal
+        if connectivity.journal().get('phase', 'idle') != 'idle' or portal.journal().get('phase', 'idle') != 'idle':
             with connectivity.operation_lock():
                 return operation(*args, **kwargs)
         return operation(*args, **kwargs)

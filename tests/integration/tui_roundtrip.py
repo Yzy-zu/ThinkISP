@@ -120,11 +120,22 @@ network_intent = NetworkIntent(ap_interface='fixture-wifi')
 connectivity.inspect_deployment = lambda: {
     'profile_uuid':'fixture-uuid','profile_name':'fixture','saved_intent':network_intent.to_dict(),
     'inventory':network_inventory,'plan':evaluate_plan(network_inventory,network_intent)}
+from thinkisp.ui import portal as portal_ui
+portal_ui.profile_uuid = lambda: 'fixture-uuid'
+portal_ui.is_hotspot_active = lambda **kw: True
+class PortalFixture:
+    @staticmethod
+    def status(**kw):
+        return {'enabled':True,'engine':'builtin','phase':'running','url':'http://192.0.2.1:49181/',
+                'clients':[{'ip':'192.0.2.2','mac':'02:11:22:33:44:55','authorized':True}], 'diagnostic':None}
+portal_ui.get_portal_backend = lambda: PortalFixture
 original_frame = TerminalUI.frame
 reported = False
 def frame(self, title, *args, **kwargs):
     global reported
     result = original_frame(self, title, *args, **kwargs)
+    if title == 'Portal cautivo':
+        os.write(fd, (json.dumps({'kind':'portal'}) + '\n').encode())
     if title.startswith('Conectividad ·'):
         os.write(fd, (json.dumps({'kind':'connectivity'}) + '\n').encode())
     if title == 'Editar red' and not reported:
@@ -188,6 +199,10 @@ try:
     wait_event('connectivity')
     os.write(master, b'\x1b')
     assert wait_event('key', key=ord('n'))['modal'] is None
+    os.write(master, b'v')
+    wait_event('portal')
+    os.write(master, b'\x1b')
+    assert wait_event('key', key=ord('v'))['modal'] is None
     press(b'?', 'help')
     press(b'\x1b', None)
     press(b'p', 'speedtest')
@@ -220,7 +235,7 @@ try:
     process.wait(timeout=5)
     assert process.returncode == 0, process.returncode
     assert b'thinkISP' in output and b'Traceback' not in output
-    print('PASS: curses real, teclado, editor de conectividad, color, paleta de acciones, cinco vistas, configuración integrada, temporizador, límites, bloqueados, DNS, resultado tardío, resize 80x24 y salida limpia; red sin modificar.')
+    print('PASS: curses real, teclado, editor de conectividad y portal, color, paleta de acciones, cinco vistas, configuración integrada, temporizador, límites, bloqueados, DNS, resultado tardío, resize 80x24 y salida limpia; red sin modificar.')
 finally:
     if process.poll() is None:
         process.terminate()
