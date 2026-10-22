@@ -1,0 +1,43 @@
+{
+  // ==========================================================================
+  // ThinkISP - Módulo personalizado para Waybar ("custom/thinkisp")
+  // ==========================================================================
+  // Modo de uso:
+  // 1. Incluye "custom/thinkisp" en "modules-left", "modules-center" o "modules-right"
+  //    en tu archivo ~/.config/waybar/config.jsonc.
+  // 2. Agrega este objeto JSON dentro de la configuración de Waybar.
+  // 3. Añade los estilos incluidos en 'thinkisp.css' a tu ~/.config/waybar/style.css.
+  // ==========================================================================
+
+  "custom/thinkisp": {
+    "format": "{}",
+    "return-type": "json",
+
+    // Proceso continuo (Stream): emite telemetría JSON en tiempo real cada 2s
+    "exec": "thinkisp widget -w",
+    "restart-interval": 5,
+
+    // Alternativa por sondeo (Polling tradicional):
+    // "exec": "thinkisp widget",
+    // "interval": 3,
+
+    "tooltip": true,
+
+    // Clic Izquierdo: Alternar Encendido / Apagado rápido de la zona Wi-Fi
+    "on-click": "thinkisp toggle",
+
+    // Clic Derecho: Abrir el Dashboard Interactivo (TUI) flotante
+    "on-click-right": "foot -a thinkisp -T thinkisp thinkisp",
+    // Alternativa con Kitty:
+    // "on-click-right": "kitty --class thinkisp -T thinkisp thinkisp",
+
+    // Clic Central: Activar Modo Boost (0 latencia, CPU performance, CAKE QoS)
+    "on-click-middle": "thinkisp boost",
+
+    // Rueda del ratón:
+    // Scroll Up: Abre monitor de tráfico top por dispositivo
+    // Scroll Down: Lista de clientes y velocidades
+    "on-scroll-up": "foot -a thinkisp -T thinkisp thinkisp top",
+    "on-scroll-down": "foot -a thinkisp -T thinkisp thinkisp clients"
+  }
+}

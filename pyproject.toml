@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thinkisp"
+version = "1.0.0"
+authors = [
+  { name="jssi" },
+]
+description = "ThinkISP - Suite de Zona Wi-Fi y Enrutamiento de Alto Rendimiento para Linux / ThinkPad"
+readme = "README.md"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Environment :: Console :: Curses",
+    "Topic :: System :: Networking",
+]
+
+[project.scripts]
+thinkisp = "main:main"
+isp = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["thinkisp*"]
