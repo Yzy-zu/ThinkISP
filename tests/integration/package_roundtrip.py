@@ -34,7 +34,7 @@ with tempfile.TemporaryDirectory(prefix='thinkisp-wheel-') as directory:
              '--no-build-isolation', '--wheel-dir', str(wheels), str(source)], cwd=work, env=env)
     wheel = next(wheels.glob('thinkisp-*.whl'))
     with zipfile.ZipFile(wheel) as archive:
-        for name in ('main.py', 'thinkisp/core/profile.py', 'thinkisp/core/doctor.py', 'thinkisp/core/topology.py', 'thinkisp/core/deployment.py', 'thinkisp/ui/connectivity.py', 'thinkisp/ui/runtime.py'):
+        for name in ('main.py', 'thinkisp/core/profile.py', 'thinkisp/core/doctor.py', 'thinkisp/core/topology.py', 'thinkisp/core/deployment.py', 'thinkisp/core/connectivity.py', 'thinkisp/ui/connectivity.py', 'thinkisp/ui/runtime.py'):
             assert name in archive.namelist(), f'Falta {name} en el wheel'
     target = work / 'venv'
     venv.EnvBuilder(with_pip=True).create(target)

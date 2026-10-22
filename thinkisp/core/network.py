@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from thinkisp.parsing import split_nmcli
 from thinkisp.errors import ThinkISPError
 
+from thinkisp.config import ap_interface, upstream_interface
 from thinkisp.config import (
     DAEMON_PID_FILE,
     ETH_IFACE,
@@ -199,7 +200,7 @@ def is_hotspot_active(check=False):
     for line in out.splitlines():
         parts = split_nmcli(line)
         if (len(parts) >= 3 and parts[0] == HOTSPOT_CONN
-                and parts[1] == WLAN_IFACE and parts[2] == "activated"):
+                and parts[1] == ap_interface(WLAN_IFACE) and parts[2] == "activated"):
             return True
     return False
 
@@ -212,7 +213,7 @@ def get_current_wifi_connection(check=False):
     for line in out.splitlines():
         parts = split_nmcli(line)
         if (len(parts) >= 4 and parts[1] in ("802-11-wireless", "wifi")
-                and parts[2] == WLAN_IFACE and parts[0] != HOTSPOT_CONN):
+                and parts[2] == ap_interface(WLAN_IFACE) and parts[0] != HOTSPOT_CONN):
             return parts[0]
     return None
 
@@ -224,7 +225,7 @@ def get_upstream_connections():
     if out:
         for line in out.splitlines():
             parts = split_nmcli(line)
-            if len(parts) >= 3 and parts[2] == ETH_IFACE and parts[0] != HOTSPOT_CONN:
+            if len(parts) >= 3 and parts[2] == upstream_interface(ETH_IFACE) and parts[0] != HOTSPOT_CONN:
                 conns.append(parts[0])
     return conns
 
@@ -244,7 +245,7 @@ def apply_upstream_dns(dns_servers=None):
 
 def get_ethernet_status():
     """Consulta la salida actual, incluso si cambió desde que abrió el panel."""
-    interface = detect_eth_iface(WLAN_IFACE)
+    interface = upstream_interface(detect_eth_iface(ap_interface(WLAN_IFACE)))
     if not interface:
         return {'interface': None, 'connected': False, 'operstate': 'Sin salida', 'speed': 'Desconocida'}
     carrier_path = Path(f"/sys/class/net/{interface}/carrier")
@@ -283,9 +284,9 @@ def get_ethernet_status():
 
 def get_hotspot_ip():
     """Obtiene la dirección IP local de la interfaz Wi-Fi compartida."""
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         return "Sin datos"
-    out = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", WLAN_IFACE])
+    out = run_cmd(["ip", "-4", "-o", "addr", "show", "dev", ap_interface(WLAN_IFACE)])
     if out:
         m = re.search(r"inet\s+([0-9.]+/\d+)", out)
         if m:
@@ -361,8 +362,9 @@ def get_hotspot_status():
     }
 
 
-def get_interface_stats(iface=WLAN_IFACE):
+def get_interface_stats(iface=None):
     """Obtiene estadísticas detalladas de transmisión/recepción de una interfaz."""
+    iface = iface or ap_interface(WLAN_IFACE)
     rx_bytes, tx_bytes = get_iface_bytes(iface)
     rx_pkts_path = Path(f"/sys/class/net/{iface}/statistics/rx_packets")
     tx_pkts_path = Path(f"/sys/class/net/{iface}/statistics/tx_packets")

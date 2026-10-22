@@ -1,4 +1,4 @@
-"""Phase 1 topology editor: changes intent only, never active network state."""
+"""Topology editor: changes intent only, never active network state."""
 import curses
 
 from thinkisp import config
@@ -17,7 +17,7 @@ def configure_connectivity(screen=None):
         while True:
             report['plan'] = evaluate_plan(report['inventory'], intent, fallback_ap=config.WLAN_IFACE)
             selected = report['plan']['selected']
-            choice = ui.choose('Conectividad · fase 1 · plan sin aplicar', [
+            choice = ui.choose('Conectividad · aplicar al encender', [
                 ('ap', f"Adaptador AP: {intent.ap_interface or 'Auto'} → {selected['ap_interface'] or 'Sin detectar'}"),
                 ('upstream', f"Entrada de Internet: {intent.upstream_interface or 'Auto'} → {selected['upstream_interface'] or 'Sin detectar'}"),
                 ('mode', f'Topología: {intent.mode} → {selected["mode"]}'),
@@ -45,7 +45,7 @@ def configure_connectivity(screen=None):
                                 options.append((device['name'], f"{device['name']} · {device['kind']} · {device['state']}"))
                     elif choice == 'mode':
                         options = [('auto', 'Detectar topología'), ('routed', 'Interfaces separadas · Ethernet, USB u otra radio'),
-                                   ('repeater', 'Una radio compartida · ejecución pendiente de fase 2')]
+                                   ('repeater', 'Una radio compartida · requiere concurrencia cliente/AP')]
                     elif choice == 'engine':
                         options = [('auto', 'Detectar motor instalado'), ('none', 'Sin portal'),
                                    ('opennds', 'openNDS · integración pendiente de fase 3')]

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 
+from thinkisp.config import ap_interface
 from thinkisp.config import (
     DAEMON_PID_FILE,
     HOTSPOT_CONN,
@@ -151,7 +152,7 @@ class HotspotWatcher:
 
     def scan_clients(self):
         """Escanea estaciones conectadas y detecta clientes nuevos o desconectados."""
-        iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"], check=True)
+        iw_out = run_cmd(["iw", "dev", ap_interface(WLAN_IFACE), "station", "dump"], check=True)
         curr_macs = set()
         if iw_out:
             for line in iw_out.splitlines():
@@ -252,6 +253,13 @@ class HotspotWatcher:
 
     def tick(self):
         """Ejecuta un ciclo de escaneo de clientes y verificación de temporizadores."""
+        from thinkisp.core.connectivity import health_check
+        try:
+            health_check()
+        except ThinkISPError as exc:
+            stop_hotspot()
+            notify('thinkISP · Entrada desconectada', str(exc), urgency='critical')
+            return {'client_events': [], 'timer_result': {'action': 'shutdown_upstream'}}
         client_events = self.scan_clients()
         timer_result = self.check_timers()
         return {
@@ -274,7 +282,7 @@ def run_daemon_loop():
                 break
 
             tick_res = watcher.tick()
-            if tick_res.get("timer_result") and tick_res["timer_result"].get("action") in ("shutdown_timer", "shutdown_idle"):
+            if tick_res.get("timer_result") and tick_res["timer_result"].get("action") in ("shutdown_timer", "shutdown_idle", "shutdown_upstream"):
                 break
 
             time.sleep(2.0)

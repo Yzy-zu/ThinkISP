@@ -9,6 +9,7 @@ import socket
 import subprocess
 import time
 
+from thinkisp.config import ap_interface
 from thinkisp.config import (
     HOTSPOT_CONN,
     WLAN_IFACE,
@@ -29,7 +30,7 @@ from thinkisp.core.network import (
     state_lock,
 )
 from thinkisp.core.profile import (
-    apply_radio_settings, hotspot_details, inspect_capabilities, require_hotspot_profile, profile_uuid, settings_arguments,
+    apply_radio_settings, hotspot_details, inspect_capabilities, require_hotspot_profile, profile_uuid, settings_arguments, ensure_profile_editable,
 )
 from thinkisp.core.access import apply_saved_blocks, clear_applied_blocks, set_client_block, blocked_clients
 from thinkisp.core.dns_state import apply_saved_dns, restore_dns
@@ -38,18 +39,18 @@ from thinkisp.core.dns_state import apply_saved_dns, restore_dns
 def get_arp_map():
     """Obtiene el mapeo MAC -> IP de la interfaz Wi-Fi."""
     arp_map = {}
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         return arp_map
     try:
         with open("/proc/net/arp") as f:
             for line in f.readlines()[1:]:
                 parts = line.split()
-                if len(parts) >= 6 and parts[5] == WLAN_IFACE:
+                if len(parts) >= 6 and parts[5] == ap_interface(WLAN_IFACE):
                     arp_map[parts[3].lower()] = parts[0]
     except Exception:
         pass
 
-    neigh_out = run_cmd(["ip", "neigh", "show", "dev", WLAN_IFACE])
+    neigh_out = run_cmd(["ip", "neigh", "show", "dev", ap_interface(WLAN_IFACE)])
     if neigh_out:
         for line in neigh_out.splitlines():
             parts = line.split()
@@ -76,7 +77,7 @@ def get_hostname_for_ip(ip):
 def parse_dhcp_leases(path=None):
     """Parsea el archivo de asignaciones DHCP (leases) de dnsmasq / NetworkManager."""
     lease_paths = [Path(path)] if path else [
-        Path(f"/var/lib/NetworkManager/dnsmasq-{WLAN_IFACE}.leases"),
+        Path(f"/var/lib/NetworkManager/dnsmasq-{ap_interface(WLAN_IFACE)}.leases"),
         Path("/var/lib/NetworkManager/dnsmasq.leases"),
         Path("/var/lib/misc/dnsmasq.leases"),
     ]
@@ -100,11 +101,11 @@ def parse_dhcp_leases(path=None):
 def get_connected_clients(check=False):
     """Obtiene los dispositivos conectados al hotspot con métricas en tiempo real."""
     clients = []
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         if check:
             raise ThinkISPError("No se detectó un adaptador Wi-Fi.")
         return clients
-    iw_out = run_cmd(["iw", "dev", WLAN_IFACE, "station", "dump"], check=check)
+    iw_out = run_cmd(["iw", "dev", ap_interface(WLAN_IFACE), "station", "dump"], check=check)
     stations = {}
     if iw_out:
         current_mac = None
@@ -187,19 +188,58 @@ def format_signal_bar(dbm):
 
 def apply_zero_latency_optimizations():
     """Optimización explícita: no se ejecuta al iniciar ni promete latencia cero."""
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         raise ThinkISPError("No se detectó una interfaz Wi-Fi.")
-    run_cmd(["iw", "dev", WLAN_IFACE, "set", "power_save", "off"], check=True)
+    run_cmd(["iw", "dev", ap_interface(WLAN_IFACE), "set", "power_save", "off"], check=True)
 
 
 def start_hotspot():
+    from thinkisp.core import connectivity
+    owner = profile_uuid()
+    state = load_state()
+    current = connectivity.journal()
+    if current.get('phase', 'idle') != 'idle' and current.get('owner') != owner:
+        raise ThinkISPError('Hay una sesión de otro perfil; apágala o recupérala antes de continuar.')
+    if not connectivity.has_intent(state, owner):
+        return _start_hotspot_legacy()
+    with connectivity.operation_lock():
+        current = connectivity.journal()
+        if is_hotspot_active(check=True):
+            if current.get('owner') != owner or current.get('phase') != 'running':
+                raise ThinkISPError('El AP está activo fuera del plan guardado. Apágalo antes de aplicar conectividad.')
+            return _start_hotspot_legacy()
+        if current and current.get('phase') != 'idle':
+            connectivity.cleanup(owner)
+        if state.get('pending_start'):
+            errors = _cleanup_session(owner)
+            if errors:
+                raise ThinkISPError('; '.join(errors))
+        connectivity.prepare(owner)
+        try:
+            result = _start_hotspot_legacy(announce=False)
+            connectivity.confirm(owner)
+            notify("thinkISP · Zona Wi-Fi activada", f"Interfaz: {ap_interface(WLAN_IFACE)}", icon="network-wireless-hotspot")
+            return result
+        except (ThinkISPError, OSError) as exc:
+            try:
+                if is_hotspot_active(check=True):
+                    run_cmd(['nmcli','connection','down','uuid',owner],check=True)
+                errors = _cleanup_session(owner)
+                if errors:
+                    raise ThinkISPError('; '.join(errors))
+            except ThinkISPError as recovery:
+                raise ThinkISPError(f'{exc}. Recuperación pendiente: {recovery}') from exc
+            raise
+
+
+def _start_hotspot_legacy(announce=True):
     """Preparar controles antes de abrir el AP y conservar recuperación previa."""
     if is_hotspot_active(check=True):
         profile = require_hotspot_profile()
         apply_saved_blocks(profile)
         apply_saved_dns(profile)
         return True, "El punto de acceso ya está activo; controles reconciliados."
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         raise ThinkISPError("No se detectó un adaptador Wi-Fi.")
     profile = require_hotspot_profile()
     pending = load_state().get('pending_start')
@@ -210,9 +250,9 @@ def start_hotspot():
         if errors:
             raise ThinkISPError('; '.join(errors))
     restore_dns(profile)
-    supported = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.AP", "device", "show", WLAN_IFACE], check=True)
+    supported = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.AP", "device", "show", ap_interface(WLAN_IFACE)], check=True)
     if supported != "yes":
-        raise ThinkISPError(f"{WLAN_IFACE} no anuncia soporte para modo AP.")
+        raise ThinkISPError(f"{ap_interface(WLAN_IFACE)} no anuncia soporte para modo AP.")
     previous_wifi = get_current_wifi_connection(check=True)
     with state_lock() as state:
         state['pending_start'] = {'profile_uuid': profile, 'previous_wifi': previous_wifi,
@@ -227,7 +267,7 @@ def start_hotspot():
             save_state(state)
         attempted = True
         run_cmd(["nmcli", "--wait", "60", "connection", "up", "uuid", profile,
-                 "ifname", WLAN_IFACE], check=True, timeout=65)
+                 "ifname", ap_interface(WLAN_IFACE)], check=True, timeout=65)
         confirmed = is_hotspot_active(check=True)
         if not confirmed:
             raise ThinkISPError("NetworkManager no confirmó la activación del hotspot.")
@@ -247,7 +287,7 @@ def start_hotspot():
         if errors:
             raise ThinkISPError(f"{exc}. Recuperación pendiente: {'; '.join(errors)}") from exc
         raise
-    rx, tx = get_iface_bytes(WLAN_IFACE)
+    rx, tx = get_iface_bytes(ap_interface(WLAN_IFACE))
     try:
         with state_lock() as state:
             if previous_wifi:
@@ -260,7 +300,8 @@ def start_hotspot():
             save_state(state)
     except ThinkISPError as exc:
         raise ThinkISPError(f"El hotspot está encendido, pero no se pudo registrar la sesión: {exc}") from exc
-    notify("thinkISP · Zona Wi-Fi activada", f"Interfaz: {WLAN_IFACE}", icon="network-wireless-hotspot")
+    if announce:
+        notify("thinkISP · Zona Wi-Fi activada", f"Interfaz: {ap_interface(WLAN_IFACE)}", icon="network-wireless-hotspot")
     return True, "Zona Wi-Fi activada con éxito."
 
 
@@ -279,7 +320,7 @@ def stop_hotspot():
     session = state.get("session")
     session_summary = None
     if session:
-        rx, tx = get_iface_bytes(WLAN_IFACE)
+        rx, tx = get_iface_bytes(ap_interface(WLAN_IFACE))
         duration = time.time() - session["start_time"]
         downloaded = max(0, tx - session["start_tx"])
         uploaded = max(0, rx - session["start_rx"])
@@ -326,9 +367,14 @@ def _cleanup_session(profile, clear_firewall=True):
         except ThinkISPError as exc:
             errors.append(str(exc))
     try:
+        from thinkisp.core.connectivity import journal
+        managed_session = journal().get('phase', 'idle') != 'idle'
         with state_lock() as state:
             pending = state.get('pending_start', {})
             previous = pending.get('previous_wifi') if pending.get('activation_attempted') else state.get('last_wifi')
+            if managed_session:
+                previous = None  # UUID restoration is owned by the connectivity journal.
+                state.pop('last_wifi', None)
             if previous:
                 run_cmd(['nmcli', 'connection', 'up', 'id', previous], check=True, timeout=65)
                 state.pop('last_wifi', None)
@@ -336,6 +382,11 @@ def _cleanup_session(profile, clear_firewall=True):
                 state.pop('pending_start', None)
             if previous or pending:
                 save_state(state)
+    except ThinkISPError as exc:
+        errors.append(str(exc))
+    try:
+        from thinkisp.core.connectivity import cleanup
+        cleanup(profile)
     except ThinkISPError as exc:
         errors.append(str(exc))
     return errors
@@ -374,6 +425,7 @@ def get_stealth_mode():
 
 def set_stealth_mode(enabled):
     """Activa o desactiva la visibilidad del SSID."""
+    ensure_profile_editable()
     val = "yes" if enabled else "no"
     run_cmd(["nmcli", "connection", "modify", "id", HOTSPOT_CONN, "802-11-wireless.hidden", val], check=True)
     if is_hotspot_active():
@@ -384,6 +436,7 @@ def set_stealth_mode(enabled):
 
 def set_band(band):
     """Selecciona una banda disponible; NetworkManager elige el canal."""
+    ensure_profile_editable()
     aliases = {"5g": "a", "5": "a", "2.4g": "bg", "2.4": "bg", "auto": ""}
     if band not in aliases:
         raise ThinkISPError("Banda no válida. Usa 'thinkisp setup' para consultar las disponibles.")
@@ -424,3 +477,19 @@ def get_qr_ascii(ssid=None, psk=None):
         if out:
             return out
     return f"+-----------------------+\n| QR: {ssid} |\n| PSK: {psk} |\n+-----------------------+"
+
+
+def _serialized_cleanup(operation):
+    from functools import wraps
+    @wraps(operation)
+    def wrapped(*args, **kwargs):
+        from thinkisp.core import connectivity
+        if connectivity.journal().get('phase', 'idle') != 'idle':
+            with connectivity.operation_lock():
+                return operation(*args, **kwargs)
+        return operation(*args, **kwargs)
+    return wrapped
+
+
+stop_hotspot = _serialized_cleanup(stop_hotspot)
+recover_network = _serialized_cleanup(recover_network)

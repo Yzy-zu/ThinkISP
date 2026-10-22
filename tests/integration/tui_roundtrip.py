@@ -220,7 +220,7 @@ try:
     process.wait(timeout=5)
     assert process.returncode == 0, process.returncode
     assert b'thinkISP' in output and b'Traceback' not in output
-    print('PASS: curses real, teclado, conectividad fase 1, color, paleta de acciones, cinco vistas, configuración integrada, temporizador, límites, bloqueados, DNS, resultado tardío, resize 80x24 y salida limpia; red sin modificar.')
+    print('PASS: curses real, teclado, editor de conectividad, color, paleta de acciones, cinco vistas, configuración integrada, temporizador, límites, bloqueados, DNS, resultado tardío, resize 80x24 y salida limpia; red sin modificar.')
 finally:
     if process.poll() is None:
         process.terminate()

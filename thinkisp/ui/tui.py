@@ -16,6 +16,7 @@ from types import SimpleNamespace
 import time
 
 # Configuración y Core de ThinkISP
+from thinkisp.config import ap_interface
 from thinkisp.config import (
     ETH_IFACE,
     WLAN_IFACE,
@@ -163,7 +164,7 @@ class TUIState:
         self.psk = ""
         self.band = "Sin datos"
         self.security = "Sin datos"
-        self.interface = WLAN_IFACE or "No detectada"
+        self.interface = ap_interface(WLAN_IFACE) or "No detectada"
         self.hostname = socket.gethostname()
         self.ip_gateway = "Sin datos"
         self.ethernet = {"connected": False, "speed": "Desconocida", "interface": ETH_IFACE}
@@ -308,7 +309,7 @@ def update_telemetry(state):
     state.timer_info = get_timer_status()
 
     # 3. Métricas de tráfico de red
-    rx_bytes, tx_bytes = get_iface_bytes(WLAN_IFACE)
+    rx_bytes, tx_bytes = get_iface_bytes(ap_interface(WLAN_IFACE))
 
     if state._last_rx_bytes is not None and state._last_tx_bytes is not None and state.hotspot_active:
         # En un punto de acceso Wi-Fi:

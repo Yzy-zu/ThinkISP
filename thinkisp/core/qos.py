@@ -3,9 +3,10 @@
 import math
 import re
 
+from thinkisp.config import ap_interface
 from thinkisp.config import HOTSPOT_CONN, WLAN_IFACE
 from thinkisp.core.network import ThinkISPError, is_hotspot_active, load_state, notify, run_cmd, save_state, state_lock
-from thinkisp.core.profile import apply_radio_settings, require_hotspot_profile
+from thinkisp.core.profile import apply_radio_settings, require_hotspot_profile, ensure_profile_editable
 
 
 def get_gaming_mode():
@@ -17,6 +18,7 @@ def get_rate_limit():
 
 
 def _configure_qdisc(value, expected=None, powersave=None):
+    ensure_profile_editable()
     active = is_hotspot_active(check=True)
     args = ["nmcli", "connection", "modify", "id", HOTSPOT_CONN, "tc.qdiscs", value]
     if powersave is not None:
@@ -25,12 +27,12 @@ def _configure_qdisc(value, expected=None, powersave=None):
     if active:
         run_cmd(["nmcli", "--wait", "60", "connection", "up", "id", HOTSPOT_CONN], check=True, timeout=65)
         apply_radio_settings(require_hotspot_profile())
-        actual = run_cmd(["tc", "qdisc", "show", "dev", WLAN_IFACE], check=True)
+        actual = run_cmd(["tc", "qdisc", "show", "dev", ap_interface(WLAN_IFACE)], check=True)
         kinds = re.findall(r"qdisc (\S+) .*?\broot\b", actual)
         if expected and expected not in kinds:
-            raise ThinkISPError(f"La cola {expected} no se encontró en {WLAN_IFACE} después de aplicar el perfil.")
+            raise ThinkISPError(f"La cola {expected} no se encontró en {ap_interface(WLAN_IFACE)} después de aplicar el perfil.")
         if not expected and any(kind in ("cake", "tbf") for kind in kinds):
-            raise ThinkISPError(f"La cola anterior continúa aplicada en {WLAN_IFACE}.")
+            raise ThinkISPError(f"La cola anterior continúa aplicada en {ap_interface(WLAN_IFACE)}.")
     return active
 
 

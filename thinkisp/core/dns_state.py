@@ -3,6 +3,7 @@
 import copy
 import re
 
+from thinkisp.config import ap_interface, upstream_interface
 from thinkisp.config import DNS_PROVIDERS, WLAN_IFACE, detect_eth_iface
 from thinkisp.core.network import (
     ThinkISPError, is_hotspot_active, load_state, run_cmd, save_state, split_nmcli, state_lock,
@@ -28,8 +29,8 @@ def active_connections():
 
 
 def upstream_target():
-    interface = detect_eth_iface(WLAN_IFACE)
-    if not interface or interface == WLAN_IFACE:
+    interface = upstream_interface(detect_eth_iface(ap_interface(WLAN_IFACE)))
+    if not interface or interface == ap_interface(WLAN_IFACE):
         raise ThinkISPError('No se detectó una salida de red distinta del hotspot para configurar DNS.')
     matches = [item for item in active_connections() if item[2] == interface]
     if len(matches) != 1:

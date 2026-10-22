@@ -63,7 +63,8 @@ def interface_combinations(raw):
                       and required <= set().union(*(names for names, _ in groups))
                       and all(len(names & required) <= limit for names, limit in groups))
         result.append({'managed_ap': allows, 'max_interfaces': int(total[1]) if total else None,
-                       'max_channels': int(channels[1]) if channels else None})
+                       'max_channels': int(channels[1]) if channels else None,
+                       'limits': [{'modes': sorted(names), 'limit': limit} for names, limit in groups]})
     return result
 
 
@@ -73,6 +74,9 @@ def parse_wireless_devices(raw):
         match = re.match(r'\s*phy#(\d+)', line)
         if match:
             phy = 'phy' + match[1]
+            interface = None
+        if 'Unnamed/non-netdev interface' in line:
+            interface = None
         match = re.match(r'\s*Interface\s+(.+)', line)
         if match:
             interface = match[1].strip()
@@ -153,7 +157,8 @@ def collect_inventory():
                 modes = re.findall(r'\*\s*(\S+)', mode_block[1]) if mode_block else []
                 radios[phy] = {'verified': raw is not None, 'modes': modes,
                                'combinations': interface_combinations(raw or ''),
-                               'ap_channels': [c.number for c in parse_channels(raw or '') if c.usable and c.band]}
+                               'ap_channels': [c.number for c in parse_channels(raw or '') if c.usable and c.band],
+                               'ap_channel_details': [{'number':c.number,'frequency':c.frequency,'band':c.band} for c in parse_channels(raw or '') if c.usable and c.band]}
     routes = []
     for family in (4, 6):
         raw = query(['ip', '-j', '-' + str(family), 'route', 'show', 'default'])
@@ -246,7 +251,7 @@ def evaluate_plan(inventory, intent, fallback_ap=None):
                   'El controlador no anuncia concurrencia cliente + AP.' if combinations else 'Concurrencia cliente + AP sin confirmar.')
         elif concurrency['same_channel_required']:
             issue('same_channel_required', 'warning', 'Cliente y AP deben seguir el mismo canal según el controlador.')
-        issue('repeater_runtime_pending', 'warning', 'Plan guardable; crear y gestionar las interfaces virtuales corresponde a fase 2.')
+        issue('repeater_activation_unverified', 'warning', 'Concurrencia anunciada; activar un AP virtual requiere permisos y aceptación real del firmware.')
     engine = intent.portal_engine
     if engine == 'auto':
         engine = 'opennds' if inventory['engines'].get('opennds', {}).get('installed') else 'none'
@@ -262,7 +267,7 @@ def evaluate_plan(inventory, intent, fallback_ap=None):
         issue('firewall_unverified', 'warning', 'No se pudo consultar nftables; compatibilidad de reglas sin verificar.')
     elif inventory['firewall']['table_count']:
         issue('firewall_existing', 'warning', 'Hay tablas nftables existentes; deben conservarse y comprobarse al integrar el portal.')
-    return {'schema_version': 1, 'phase': 1, 'intent': intent.to_dict(),
+    return {'schema_version': 1, 'phase': 2, 'intent': intent.to_dict(),
             'selected': {'ap_interface': ap_name, 'upstream_interface': upstream_name, 'mode': mode, 'portal_engine': engine},
             'concurrency': concurrency, 'issues': issues, 'configuration_valid': not any(i['level'] == 'error' for i in issues),
             'activation_tested': False, 'portal_enabled': False, 'applied': False, 'internet_verified': False}

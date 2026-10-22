@@ -69,3 +69,13 @@ jobs:
           bash -n install.sh extras/completions/thinkisp.bash
           fish -n extras/completions/thinkisp.fish
           zsh -n extras/completions/_thinkisp
+
+  routing:
+    name: Isolated Linux policy routing
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install routing tools
+        run: sudo apt-get update && sudo apt-get install -y iproute2
+      - name: Selected upstream, fail closed and cleanup in an empty network namespace
+        run: sudo unshare --user --map-root-user --net python3 tests/integration/connectivity_roundtrip.py

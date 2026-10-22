@@ -245,9 +245,10 @@ class TestNetworkOperations(unittest.TestCase):
         self.assertIsNone(status["ip"])
         self.assertFalse(status["forwarding"])
 
+    @patch("thinkisp.config.runtime_selection", return_value={})
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
-    def test_is_ip_forwarding_enabled(self, mock_read, mock_exists):
+    def test_is_ip_forwarding_enabled(self, mock_read, mock_exists, runtime):
         mock_exists.return_value = True
         mock_read.return_value = "1\n"
         self.assertTrue(is_ip_forwarding_enabled())
@@ -272,9 +273,10 @@ class TestNetworkOperations(unittest.TestCase):
         self.assertTrue(enable_ip_forwarding())
         mock_write.assert_called_once_with("1")
 
+    @patch("thinkisp.config.runtime_selection", return_value={})
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
-    def test_get_interface_stats(self, mock_read, mock_exists):
+    def test_get_interface_stats(self, mock_read, mock_exists, runtime):
         mock_exists.return_value = True
         # Side effect for rx_bytes, tx_bytes, rx_packets, tx_packets
         mock_read.side_effect = ["10485760\n", "5242880\n", "7800\n", "4500\n"]
@@ -288,9 +290,10 @@ class TestNetworkOperations(unittest.TestCase):
         self.assertEqual(stats["rx_formatted"], "10.0 MB")
         self.assertEqual(stats["tx_formatted"], "5.0 MB")
 
+    @patch("thinkisp.config.runtime_selection", return_value={})
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
-    def test_get_iface_bytes(self, mock_read, mock_exists):
+    def test_get_iface_bytes(self, mock_read, mock_exists, runtime):
         mock_exists.return_value = True
         mock_read.side_effect = ["1024\n", "2048\n"]
         rx, tx = get_iface_bytes("wlan0")
@@ -322,10 +325,11 @@ class TestNetworkOperations(unittest.TestCase):
         apply_upstream_dns(None)
         configure.assert_called_with(None)
 
+    @patch("thinkisp.config.runtime_selection", return_value={})
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
     @patch("thinkisp.core.network.run_cmd")
-    def test_get_ethernet_status_connected(self, mock_run_cmd, mock_read, mock_exists):
+    def test_get_ethernet_status_connected(self, mock_run_cmd, mock_read, mock_exists, runtime):
         mock_exists.return_value = True
         mock_read.side_effect = ["1\n", "up\n"]  # carrier, operstate
         mock_run_cmd.return_value = "Settings for enp0s31f6:\nSpeed: 1000Mb/s\nDuplex: Full"
@@ -336,9 +340,10 @@ class TestNetworkOperations(unittest.TestCase):
         self.assertEqual(eth["operstate"], "up")
         self.assertEqual(eth["speed"], "1000Mb/s")
 
+    @patch("thinkisp.config.runtime_selection", return_value={})
     @patch("pathlib.Path.exists")
     @patch("pathlib.Path.read_text")
-    def test_get_ethernet_status_disconnected(self, mock_read, mock_exists):
+    def test_get_ethernet_status_disconnected(self, mock_read, mock_exists, runtime):
         mock_exists.return_value = True
         mock_read.side_effect = ["0\n", "down\n"]
 

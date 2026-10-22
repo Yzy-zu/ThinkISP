@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import uuid
 
+from thinkisp.config import ap_interface
 from thinkisp.config import HOTSPOT_CONN, WLAN_IFACE, default_ssid
 from thinkisp.core.network import ThinkISPError, load_state, run_cmd, save_state, split_nmcli, state_lock
 
@@ -42,8 +43,8 @@ def require_hotspot_profile():
     if (values[fields[0]] != "802-11-wireless" or values[fields[1]] != "ap"
             or values[fields[2]] != "shared"):
         raise ThinkISPError(f"El perfil {HOTSPOT_CONN!r} no es un AP con conexión compartida. Revisa 'thinkisp setup'.")
-    if values[fields[3]] and values[fields[3]] != WLAN_IFACE:
-        raise ThinkISPError(f"El perfil usa {values[fields[3]]}; el adaptador seleccionado es {WLAN_IFACE or 'ninguno'}. Revisa 'thinkisp setup'.")
+    if values[fields[3]] and values[fields[3]] != ap_interface(WLAN_IFACE):
+        raise ThinkISPError(f"El perfil usa {values[fields[3]]}; el adaptador seleccionado es {ap_interface(WLAN_IFACE) or 'ninguno'}. Revisa 'thinkisp setup'.")
     return profile
 
 
@@ -148,20 +149,20 @@ def probe_property(template, name, value):
 
 
 def inspect_capabilities(allow_unusable=False):
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         raise ThinkISPError("No se detectó un adaptador Wi-Fi. Conecta uno y vuelve a ejecutar thinkISP.")
-    ap = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.AP", "device", "show", WLAN_IFACE], check=True)
+    ap = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.AP", "device", "show", ap_interface(WLAN_IFACE)], check=True)
     if ap != "yes":
-        raise ThinkISPError(f"{WLAN_IFACE} no anuncia soporte AP en NetworkManager.")
-    info = run_cmd(["iw", "dev", WLAN_IFACE, "info"], check=True)
+        raise ThinkISPError(f"{ap_interface(WLAN_IFACE)} no anuncia soporte AP en NetworkManager.")
+    info = run_cmd(["iw", "dev", ap_interface(WLAN_IFACE), "info"], check=True)
     wiphy = re.search(r"\bwiphy\s+(\d+)", info)
     if not wiphy:
-        raise ThinkISPError(f"No se pudo identificar la radio de {WLAN_IFACE}.")
+        raise ThinkISPError(f"No se pudo identificar la radio de {ap_interface(WLAN_IFACE)}.")
     phy = f"phy{wiphy[1]}"
     raw = run_cmd(["iw", "phy", phy, "info"], check=True)
-    driver_path = Path(f"/sys/class/net/{WLAN_IFACE}/device/driver")
+    driver_path = Path(f"/sys/class/net/{ap_interface(WLAN_IFACE)}/device/driver")
     driver = driver_path.resolve().name if driver_path.exists() else "No informado"
-    caps = Capabilities(WLAN_IFACE, phy, driver, parse_channels(raw), raw=raw)
+    caps = Capabilities(ap_interface(WLAN_IFACE), phy, driver, parse_channels(raw), raw=raw)
     caps.regulatory = run_cmd(["iw", "reg", "get"], check=True)
     template = _offline_template()
     caps.nm_bands = {band for band in caps.bands
@@ -183,7 +184,7 @@ def inspect_capabilities(allow_unusable=False):
                 caps.widths_by_band[band].append(width)
     caps.widths = sorted({width for widths in caps.widths_by_band.values() for width in widths},
                         key=lambda width: 0 if width == 'auto' else int(width))
-    wpa3 = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.WPA3", "device", "show", WLAN_IFACE])
+    wpa3 = run_cmd(["nmcli", "-g", "WIFI-PROPERTIES.WPA3", "device", "show", ap_interface(WLAN_IFACE)])
     if wpa3 != "no" and probe_property(template, "802-11-wireless-security.key-mgmt", "sae"):
         caps.security.append("sae")
         if wpa3 != "yes" and "SAE" not in raw:
@@ -198,10 +199,10 @@ def inspect_capabilities(allow_unusable=False):
         caps.optional[name] = probe_property(template, name, value)
     if not caps.bands and not allow_unusable:
         if not caps.channels:
-            raise ThinkISPError(f'No se pudo interpretar la lista de canales de iw para {WLAN_IFACE}.')
+            raise ThinkISPError(f'No se pudo interpretar la lista de canales de iw para {ap_interface(WLAN_IFACE)}.')
         if any(c.usable and c.band for c in caps.channels):
             raise ThinkISPError('nmcli no aceptó las bandas disponibles. Revisa la versión de NetworkManager.')
-        raise ThinkISPError(f"{WLAN_IFACE} no anuncia canales autorizados para AP. Revisa el dominio regulatorio del sistema.")
+        raise ThinkISPError(f"{ap_interface(WLAN_IFACE)} no anuncia canales autorizados para AP. Revisa el dominio regulatorio del sistema.")
     return caps
 
 
@@ -284,8 +285,15 @@ def settings_arguments(settings):
     return [part for key, value in ordered for part in (key, str(value))]
 
 
+def ensure_profile_editable():
+    from thinkisp.config import runtime_selection
+    if runtime_selection().get('phase') in ('preparing','prepared','running','recovering'):
+        raise ThinkISPError('Apaga la zona antes de cambiar su perfil: hay ajustes temporales de conectividad activos.')
+
+
 def save_profile(settings, caps, tx_power=None):
     """Valida antes de escribir y nunca sobrescribe un perfil ajeno por accidente."""
+    ensure_profile_editable()
     validate_settings(settings, caps, tx_power)
     settings = dict(settings)
     settings.update({"802-11-wireless.mode": "ap", "ipv4.method": "shared"})
@@ -318,7 +326,7 @@ def save_profile(settings, caps, tx_power=None):
 def apply_radio_settings(profile):
     config = load_state().get("radio", {}).get(profile, {})
     power = config.get("tx_power_dbm")
-    args = ["iw", "dev", WLAN_IFACE, "set", "txpower"]
+    args = ["iw", "dev", ap_interface(WLAN_IFACE), "set", "txpower"]
     if power is None:
         args.append("auto")
     else:
@@ -334,9 +342,9 @@ def hotspot_details(secrets=False):
     values = profile_values(fields)
     data = {"ssid": values[fields[0]] or "Sin configurar", "radio": "Sin datos",
             "hidden": values[fields[3]] == "yes", "security": values[fields[4]] or "Sin datos",
-            "firewall": values[fields[5]] or "Predeterminada", "interface": WLAN_IFACE or "No detectada"}
-    if WLAN_IFACE:
-        info = run_cmd(["iw", "dev", WLAN_IFACE, "info"])
+            "firewall": values[fields[5]] or "Predeterminada", "interface": ap_interface(WLAN_IFACE) or "No detectada"}
+    if ap_interface(WLAN_IFACE):
+        info = run_cmd(["iw", "dev", ap_interface(WLAN_IFACE), "info"])
         channel = re.search(r"channel (\d+) \((\d+(?:\.\d+)?) MHz\)(?:, width: ([^,\n]+))?", info or "")
         if channel:
             data["radio"] = f"{channel[2]} MHz · canal {channel[1]}"

@@ -98,13 +98,13 @@ def collect_report():
             features[key] = probe_property(template, key, value)
         add('nmcli_optional_properties', 'ok', 'Disponibilidad del parser consultada; no confirma el soporte del controlador.')
 
-    hardware = {'interface': config.WLAN_IFACE, 'activation_tested': False}
-    if not config.WLAN_IFACE:
+    hardware = {'interface': config.ap_interface(config.WLAN_IFACE), 'activation_tested': False}
+    if not config.ap_interface(config.WLAN_IFACE):
         add('wifi_ap', 'error', 'No se detectó Wi-Fi. Comprueba el adaptador y el controlador, o selecciona THINKISP_WLAN.', True)
     elif daemon_available and binaries['iw'] and template:
-        managed = run_cmd(['nmcli', '-g', 'GENERAL.NM-MANAGED', 'device', 'show', config.WLAN_IFACE])
+        managed = run_cmd(['nmcli', '-g', 'GENERAL.NM-MANAGED', 'device', 'show', config.ap_interface(config.WLAN_IFACE)])
         if managed == 'no':
-            add('wifi_managed', 'error', f'{config.WLAN_IFACE} no está gestionada por NetworkManager.', True)
+            add('wifi_managed', 'error', f'{config.ap_interface(config.WLAN_IFACE)} no está gestionada por NetworkManager.', True)
         try:
             caps = inspect_capabilities(allow_unusable=True)
             hardware.update(driver=caps.driver, phy=caps.phy, bands=caps.bands,
@@ -131,9 +131,9 @@ def collect_report():
     else:
         add('wifi_ap', 'unverified', 'No se pudieron consultar las capacidades AP con las herramientas y permisos disponibles.', True)
 
-    upstream = config.detect_eth_iface(config.WLAN_IFACE)
-    add('upstream', 'ok' if upstream and upstream != config.WLAN_IFACE else 'warning',
-        f'Salida detectada: {upstream}.' if upstream and upstream != config.WLAN_IFACE else 'Sin salida distinta del AP; compartir Internet y cambiar DNS requiere una.')
+    upstream = config.upstream_interface(config.detect_eth_iface(config.ap_interface(config.WLAN_IFACE)))
+    add('upstream', 'ok' if upstream and upstream != config.ap_interface(config.WLAN_IFACE) else 'warning',
+        f'Salida detectada: {upstream}.' if upstream and upstream != config.ap_interface(config.WLAN_IFACE) else 'Sin salida distinta del AP; compartir Internet y cambiar DNS requiere una.')
     dnsmasq = shutil.which('dnsmasq')
     add('shared_dhcp_dns', 'ok' if dnsmasq else 'warning',
         'dnsmasq disponible; no se inicia ni se comprueba DHCP.' if dnsmasq else 'No se encontró dnsmasq en PATH. El modo compartido requiere el backend DHCP/DNS que use NetworkManager.')

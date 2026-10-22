@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 
+from thinkisp.config import ap_interface
 from thinkisp.config import (
     BLUE,
     BOLD,
@@ -99,7 +100,7 @@ def cmd_network(args):
             if value is not None:
                 values[key] = None if key.endswith('_interface') and value == 'auto' else value
         intent = NetworkIntent(**values).validate()
-        report['plan'] = evaluate_plan(report['inventory'], intent, fallback_ap=WLAN_IFACE)
+        report['plan'] = evaluate_plan(report['inventory'], intent, fallback_ap=ap_interface(WLAN_IFACE))
     report['saved'] = False
     if getattr(args, 'save', False):
         store_deployment(report)
@@ -188,8 +189,8 @@ def cmd_status(args):
     print(f"Zona de firewall del perfil: {data['firewall']}")
     print(f"IPv4 forwarding: {'Activo' if get_ip_forward_status() else 'Inactivo'}")
     print(f"Salida: {eth['interface'] or 'No detectada'} · {'Conectada' if eth['connected'] else 'Desconectada'} · {eth['speed']}")
-    if active and WLAN_IFACE:
-        qdiscs = run_cmd(['tc', 'qdisc', 'show', 'dev', WLAN_IFACE])
+    if active and ap_interface(WLAN_IFACE):
+        qdiscs = run_cmd(['tc', 'qdisc', 'show', 'dev', ap_interface(WLAN_IFACE)])
         print(f"Colas aplicadas: {qdiscs or 'Sin datos'}")
         cmd_clients(args)
 
@@ -219,7 +220,7 @@ def cmd_speed(args):
     if eth["connected"]:
         print(f"  {GREEN}✔ Enlace de origen:{RESET} {BOLD}{eth.get('interface') or 'Sin datos'}{RESET} ({CYAN}{eth['speed']}{RESET})")
     else:
-        print(f"  {YELLOW}ℹ Enlace actual:{RESET} Wi-Fi cliente / Móvil (Ethernet no conectado)")
+        print(f"  {YELLOW}ℹ Enlace actual:{RESET} Sin enlace de entrada confirmado")
     
     print(f"\n  {DIM}Ejecutando prueba de velocidad contra la red edge...{RESET}")
     metrics = run_speedtest()
@@ -244,7 +245,7 @@ def cmd_top(args):
     print("\033[?25l", end="")
     prev_stations = {}
     prev_time = time.time()
-    prev_tot_rx, prev_tot_tx = get_iface_bytes(WLAN_IFACE)
+    prev_tot_rx, prev_tot_tx = get_iface_bytes(ap_interface(WLAN_IFACE))
 
     try:
         while True:
@@ -252,7 +253,7 @@ def cmd_top(args):
             curr_time = time.time()
             dt = max(0.2, curr_time - prev_time)
             
-            curr_tot_rx, curr_tot_tx = get_iface_bytes(WLAN_IFACE)
+            curr_tot_rx, curr_tot_tx = get_iface_bytes(ap_interface(WLAN_IFACE))
             tot_down_rate = max(0, (curr_tot_tx - prev_tot_tx) / dt)
             tot_up_rate = max(0, (curr_tot_rx - prev_tot_rx) / dt)
 
@@ -261,7 +262,7 @@ def cmd_top(args):
             output = []
             output.append("\033[H\033[2J")
             output.append(f"{BOLD}{CYAN}┌─── [ THINKISP TOP: TRÁFICO EN TIEMPO REAL ] ─────────────{RESET}")
-            output.append(f"│  Red: {BOLD}{hotspot_details()['ssid']}{RESET} | Interfaz: {WLAN_IFACE} | Clientes: {len(curr_stations)}")
+            output.append(f"│  Red: {BOLD}{hotspot_details()['ssid']}{RESET} | Interfaz: {ap_interface(WLAN_IFACE)} | Clientes: {len(curr_stations)}")
             output.append(f"│  Tráfico Total: {GREEN}⬇ {format_bytes(tot_down_rate)}/s{RESET} | {BLUE}⬆ {format_bytes(tot_up_rate)}/s{RESET}")
             output.append(f"│  {DIM}Presiona Ctrl+C para salir.{RESET}")
             output.append(f"{BOLD}{CYAN}└──────────────────────────────────────────────────────────{RESET}\n")
@@ -302,7 +303,7 @@ def cmd_stats(args):
     if active:
         session = state.get("session")
         if session:
-            rx, tx = get_iface_bytes(WLAN_IFACE)
+            rx, tx = get_iface_bytes(ap_interface(WLAN_IFACE))
             duration = time.time() - session["start_time"]
             downloaded = max(0, tx - session["start_tx"])
             uploaded = max(0, rx - session["start_rx"])
@@ -351,7 +352,7 @@ def cmd_widget(args):
             if session:
                 dur = time.time() - session["start_time"]
                 dur_str = f" | {format_duration(dur)}"
-                rx, tx = get_iface_bytes(WLAN_IFACE)
+                rx, tx = get_iface_bytes(ap_interface(WLAN_IFACE))
                 down = max(0, tx - session["start_tx"])
                 down_str = f"\nDescargado: {format_bytes(down)}"
                 
@@ -363,7 +364,7 @@ def cmd_widget(args):
                     f"Estado: Activo{dur_str}\n"
                     f"Clientes: {client_count}\n"
                     f"Gateway: {ip_addr}{down_str}\n"
-                    f"Ethernet: {'Conectado (' + eth['speed'] + ')' if eth['connected'] else 'Desconectado'}"
+                    f"Entrada: {'Conectado (' + eth['speed'] + ')' if eth['connected'] else 'Desconectado'}"
                 ),
                 "class": "active",
                 "percentage": 100,

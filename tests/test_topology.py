@@ -42,7 +42,7 @@ def plan(data=None, **kwargs):
 
 class TestRadioCombinations(unittest.TestCase):
     def test_ap_and_managed_in_separate_groups_allow_same_channel(self):
-        self.assertEqual(t.interface_combinations(RADIO),[{'managed_ap':True,'max_interfaces':3,'max_channels':1}])
+        self.assertEqual(t.interface_combinations(RADIO),[{'managed_ap':True,'max_interfaces':3,'max_channels':1,'limits':[{'modes':['managed'],'limit':1},{'modes':['AP','P2P-GO'],'limit':1}]}])
 
     def test_shared_group_with_limit_one_cannot_host_both_modes(self):
         raw=RADIO.replace('#{ managed } <= 1, #{ AP, P2P-GO } <= 1','#{ managed, AP, P2P-GO } <= 1')
@@ -77,7 +77,7 @@ class TestTopologyPlans(unittest.TestCase):
         self.assertEqual(result['concurrency']['status'],'advertised')
         self.assertTrue(result['concurrency']['same_channel_required'])
         self.assertFalse(result['activation_tested'])
-        self.assertIn('repeater_runtime_pending',[x['code'] for x in result['issues']])
+        self.assertIn('repeater_activation_unverified',[x['code'] for x in result['issues']])
 
     def test_different_virtual_interfaces_on_same_phy_need_repeater(self):
         data=inventory(kind='wifi')

@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 
+from thinkisp.config import ap_interface
 from thinkisp.config import WLAN_IFACE
 from thinkisp.core.network import (
     CommandError, ThinkISPError, is_hotspot_active, load_state, notify,
@@ -31,9 +32,9 @@ def resolve_target(target):
         address = ipaddress.ip_address(target.strip())
     except ValueError as exc:
         raise ThinkISPError("Indica una dirección IP o MAC válida.") from exc
-    if not WLAN_IFACE:
+    if not ap_interface(WLAN_IFACE):
         raise ThinkISPError("No se detectó una interfaz Wi-Fi.")
-    output = run_cmd(["ip", "-j", "neigh", "show", "dev", WLAN_IFACE], check=True)
+    output = run_cmd(["ip", "-j", "neigh", "show", "dev", ap_interface(WLAN_IFACE)], check=True)
     try:
         neighbors = json.loads(output)
         matches = {normalize_mac(item['lladdr']) for item in neighbors
@@ -55,7 +56,7 @@ class Firewall:
 
     def __init__(self, profile, interface=None):
         self.table = table_name(profile)
-        self.interface = interface or WLAN_IFACE
+        self.interface = interface or ap_interface(WLAN_IFACE)
         binary = shutil.which("nft")
         if not binary:
             raise ThinkISPError("Instala nftables para gestionar el acceso de clientes.")
@@ -161,7 +162,7 @@ def set_client_block(target, blocked=True):
         firewall = Firewall(profile) if active or starting or recovering else None
         if firewall:
             state.setdefault('access_journal', {})[profile] = {
-                'previous': list(previous), 'interface': WLAN_IFACE,
+                'previous': list(previous), 'interface': ap_interface(WLAN_IFACE),
             }
             save_state(state)  # Recuperación de un cambio interrumpido, no éxito.
             try:
@@ -174,11 +175,11 @@ def set_client_block(target, blocked=True):
                 except ThinkISPError as recovery:
                     raise ThinkISPError(f"{exc}. No se pudo recuperar la política anterior: {recovery}") from exc
                 raise
-        records[profile] = {'macs': sorted(desired), 'interface': WLAN_IFACE}
+        records[profile] = {'macs': sorted(desired), 'interface': ap_interface(WLAN_IFACE)}
         active_rules = state.setdefault('access_active', {})
         previous_active = active_rules.get(profile)
         if firewall and desired and (active or starting):
-            active_rules[profile] = {'interface': WLAN_IFACE}
+            active_rules[profile] = {'interface': ap_interface(WLAN_IFACE)}
         elif firewall:
             active_rules.pop(profile, None)
         state.get('access_journal', {}).pop(profile, None)
@@ -188,7 +189,7 @@ def set_client_block(target, blocked=True):
             if firewall:
                 try:
                     firewall.apply(previous if active or starting else [])
-                    records[profile] = {'macs': list(previous), 'interface': WLAN_IFACE}
+                    records[profile] = {'macs': list(previous), 'interface': ap_interface(WLAN_IFACE)}
                     if previous_active:
                         active_rules[profile] = previous_active
                     else:
@@ -209,7 +210,7 @@ def apply_saved_blocks(profile):
         records = state.get('access_control', {}).get(profile, {})
         recovering = profile in state.get('access_journal', {})
         if records.get('macs') or recovering or profile in state.get('access_active', {}):
-            state.setdefault('access_active', {})[profile] = {'interface': WLAN_IFACE}
+            state.setdefault('access_active', {})[profile] = {'interface': ap_interface(WLAN_IFACE)}
             save_state(state)
             Firewall(profile).apply(records.get('macs', []))
             if not records.get('macs'):

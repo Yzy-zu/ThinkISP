@@ -1,4 +1,4 @@
-"""Per-profile network intent. Phase 1 stores a plan, never applies it."""
+"""Per-profile network intent. Inspection and intent storage never mutate the live network."""
 from dataclasses import fields
 import uuid
 
@@ -32,6 +32,8 @@ def save_intent(profile, intent):
     except (ValueError, TypeError, AttributeError) as exc:
         raise ThinkISPError('Configura primero un perfil AP con thinkisp setup.') from exc
     with state_lock() as state:
+        if state.get('connectivity_runtime', {}).get('phase', 'idle') != 'idle':
+            raise ThinkISPError('Apaga o recupera la conectividad antes de cambiar el plan.')
         records = state.setdefault('network_profiles', {})
         if not isinstance(records, dict):
             raise ThinkISPError('La configuración existente de conectividad está dañada.')
@@ -49,7 +51,9 @@ def inspect_deployment(intent=None):
     intent = intent or saved
     inventory = collect_inventory()
     plan = evaluate_plan(inventory, intent, fallback_ap=config.WLAN_IFACE)
-    return {'schema_version': 1, 'profile_uuid': profile, 'profile_name': config.HOTSPOT_CONN,
+    runtime = load_state().get('connectivity_runtime', {})
+    runtime = runtime if runtime.get('owner') == profile else {}
+    return {'runtime': {key: runtime[key] for key in ('phase', 'ap_interface', 'upstream_interface', 'mode') if key in runtime}, 'schema_version': 1, 'profile_uuid': profile, 'profile_name': config.HOTSPOT_CONN,
             'saved_intent': saved.to_dict(), 'inventory': inventory, 'plan': plan, 'profile_error': profile_error}
 
 
@@ -71,7 +75,7 @@ def report_lines(report):
              f"AP: {selected['ap_interface'] or 'Sin detectar'}",
              f"Entrada de Internet: {selected['upstream_interface'] or 'Sin detectar'}",
              f"Topología: {selected['mode']}", f"Motor previsto: {selected['portal_engine']}",
-             'Fase 1: plan de configuración; no aplicado. Portal desactivado.', '', 'Interfaces detectadas:']
+             f"Ejecución: {report.get('runtime', {}).get('phase', 'sin aplicar')}. Se aplica al encender. Portal desactivado.", '', 'Interfaces detectadas:']
     for device in report['inventory']['devices']:
         lines.append(f"  {device['name']} · {device['kind']} · {device['state']} · bus {device['bus']}" +
                      (f" · {device['phy']}" if device.get('phy') else ''))

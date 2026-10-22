@@ -14,11 +14,45 @@ PROJECT_NAME = "thinkISP"
 HOTSPOT_CONN = os.environ.get("THINKISP_PROFILE", PROJECT_NAME)
 
 
+# Directorios de estado y datos
+_state_home = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
+if not _state_home.is_absolute():
+    _state_home = Path.home() / '.local/state'
+STATE_DIR = _state_home / "isp"
+STATE_FILE = STATE_DIR / "state.json"
+TIMER_FILE = STATE_DIR / "timer.json"
+DAEMON_PID_FILE = STATE_DIR / "daemon.pid"
+
+
 def default_ssid():
     """Nombre inicial por equipo; los perfiles existentes conservan su SSID."""
     hostname = socket.gethostname().split(".")[0]
     name = os.environ.get("THINKISP_SSID", f"{PROJECT_NAME}-{hostname}")
     return name.encode("utf-8")[:32].decode("utf-8", errors="ignore")
+
+
+def runtime_selection():
+    """Read the current process-independent session without querying the network."""
+    from thinkisp.errors import ThinkISPError
+    try:
+        data = json.loads(STATE_FILE.read_text()).get('connectivity_runtime', {})
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, AttributeError) as exc:
+        raise ThinkISPError(f'No se pudo leer la sesión de conectividad: {exc}') from exc
+    if not isinstance(data, dict):
+        raise ThinkISPError('El registro de conectividad está dañado; ejecuta la recuperación.')
+    return data if data.get('owner_name') == HOTSPOT_CONN else {}
+
+
+def ap_interface(fallback=None):
+    record = runtime_selection()
+    return record.get('ap_interface') or fallback
+
+
+def upstream_interface(fallback=None):
+    record = runtime_selection()
+    return record.get('upstream_interface') if record.get('phase') != 'idle' and record.get('upstream_interface') else fallback
 
 
 def _probe(args):
@@ -107,15 +141,6 @@ def detect_eth_iface(wlan_iface=None):
 
 WLAN_IFACE = detect_wlan_iface()
 ETH_IFACE = detect_eth_iface(WLAN_IFACE)
-
-# Directorios de estado y datos
-_state_home = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
-if not _state_home.is_absolute():
-    _state_home = Path.home() / '.local/state'
-STATE_DIR = _state_home / "isp"
-STATE_FILE = STATE_DIR / "state.json"
-TIMER_FILE = STATE_DIR / "timer.json"
-DAEMON_PID_FILE = STATE_DIR / "daemon.pid"
 
 # Proveedores de DNS
 DNS_PROVIDERS = {
